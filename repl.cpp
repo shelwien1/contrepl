@@ -6,6 +6,7 @@
 #include <pcre2.h>
 #include <vector>
 #include <string>
+#include <map>
 
 using namespace std;
 
@@ -58,6 +59,10 @@ bool parse_config(const char* config_file, string& lookbehind,
     line[len-1] = 0;
     len--;
   }
+  if (len > 0 && line[len-1] == '\r') {
+    line[len-1] = 0;
+    len--;
+  }
   lookbehind = line;
 
   if (!fgets(line, sizeof(line), f)) {
@@ -70,11 +75,19 @@ bool parse_config(const char* config_file, string& lookbehind,
     line[len-1] = 0;
     len--;
   }
+  if (len > 0 && line[len-1] == '\r') {
+    line[len-1] = 0;
+    len--;
+  }
   lookahead = line;
 
   while (fgets(line, sizeof(line), f)) {
     len = strlen(line);
     if (len > 0 && line[len-1] == '\n') {
+      line[len-1] = 0;
+      len--;
+    }
+    if (len > 0 && line[len-1] == '\r') {
       line[len-1] = 0;
       len--;
     }
@@ -138,7 +151,7 @@ bool process_file(const char* input_file,
   vector<::byte> input_data;
   vector<::byte> output_data;
   ::byte buffer[8192];
-  size_t n, i, j, pos, pair_idx;
+  size_t n, i, j, pair_idx;
   pcre2_code* re;
   pcre2_match_data* match_data;
   PCRE2_SIZE* ovector;
@@ -146,10 +159,12 @@ bool process_file(const char* input_file,
   string pattern;
   int errornumber;
   PCRE2_SIZE erroroffset;
-  const string* search_str;
-  const string* replace_str;
   char hex[3];
   qword file_size;
+  map<string, string> replacement_map;
+  string matched_str;
+  size_t pos;
+  PCRE2_SIZE match_len;
 
   fin = fopen(input_file, "rb");
   if (!fin) {
@@ -174,90 +189,111 @@ bool process_file(const char* input_file,
 
   fprintf(stderr, "Read %lld bytes from input\n", file_size);
 
+  if (lookbehind.length() > 0) {
+    pattern = "(?<=";
+    pattern += lookbehind;
+    pattern += ")";
+  } else {
+    pattern = "";
+  }
+  pattern += "(";
+
   pair_idx = 0;
   while (pair_idx < pairs.size()) {
-    if (decode) {
-      search_str = &pairs[pair_idx].to;
-      replace_str = &pairs[pair_idx].from;
-    } else {
-      search_str = &pairs[pair_idx].from;
-      replace_str = &pairs[pair_idx].to;
+    if (pair_idx > 0) {
+      pattern += "|";
     }
 
-    if (lookbehind.length() > 0) {
-      pattern = "(?<=";
-      pattern += lookbehind;
-      pattern += ")";
-    } else {
-      pattern = "";
-    }
-    pattern += "(";
     j = 0;
-    while (j < search_str->length()) {
-      pattern += "\\x";
-      sprintf(hex, "%02x", (::byte)(*search_str)[j]);
-      pattern += hex;
-      j++;
-    }
-    pattern += ")";
-    if (lookahead.length() > 0) {
-      pattern += "(?=";
-      pattern += lookahead;
-      pattern += ")";
-    }
-
-    re = pcre2_compile((PCRE2_SPTR)pattern.c_str(),
-                       PCRE2_ZERO_TERMINATED,
-                       0, &errornumber, &erroroffset, NULL);
-    if (!re) {
-      fprintf(stderr, "Error: PCRE2 compilation failed\n");
-      return false;
-    }
-
-    match_data = pcre2_match_data_create_from_pattern(
-      re, NULL);
-
-    pos = 0;
-    output_data.clear();
-
-    while (pos < input_data.size()) {
-      rc = pcre2_match(re,
-                       (PCRE2_SPTR)input_data.data(),
-                       input_data.size(), pos, 0,
-                       match_data, NULL);
-
-      if (rc < 0) {
-        j = pos;
-        while (j < input_data.size()) {
-          output_data.push_back(input_data[j]);
-          j++;
-        }
-        break;
+    if (decode) {
+      replacement_map[pairs[pair_idx].to] = pairs[pair_idx].from;
+      while (j < pairs[pair_idx].to.length()) {
+        pattern += "\\x";
+        sprintf(hex, "%02x", (::byte)pairs[pair_idx].to[j]);
+        pattern += hex;
+        j++;
       }
+    } else {
+      replacement_map[pairs[pair_idx].from] = pairs[pair_idx].to;
+      while (j < pairs[pair_idx].from.length()) {
+        pattern += "\\x";
+        sprintf(hex, "%02x", (::byte)pairs[pair_idx].from[j]);
+        pattern += hex;
+        j++;
+      }
+    }
+    pair_idx++;
+  }
 
-      ovector = pcre2_get_ovector_pointer(match_data);
+  pattern += ")";
+  if (lookahead.length() > 0) {
+    pattern += "(?=";
+    pattern += lookahead;
+    pattern += ")";
+  }
 
+  re = pcre2_compile((PCRE2_SPTR)pattern.c_str(),
+                     PCRE2_ZERO_TERMINATED,
+                     0, &errornumber, &erroroffset, NULL);
+  if (!re) {
+    fprintf(stderr, "Error: PCRE2 compilation failed\n");
+    return false;
+  }
+
+  match_data = pcre2_match_data_create_from_pattern(re, NULL);
+
+  pos = 0;
+  while (pos < input_data.size()) {
+    rc = pcre2_match(re,
+                     (PCRE2_SPTR)input_data.data(),
+                     input_data.size(), pos, 0,
+                     match_data, NULL);
+
+    if (rc < 0) {
       j = pos;
-      while (j < ovector[2]) {
+      while (j < input_data.size()) {
         output_data.push_back(input_data[j]);
         j++;
       }
-
-      j = 0;
-      while (j < replace_str->length()) {
-        output_data.push_back((*replace_str)[j]);
-        j++;
-      }
-
-      pos = ovector[3];
+      break;
     }
 
-    pcre2_match_data_free(match_data);
-    pcre2_code_free(re);
+    ovector = pcre2_get_ovector_pointer(match_data);
 
-    input_data = output_data;
-    pair_idx++;
+    j = pos;
+    while (j < ovector[2]) {
+      output_data.push_back(input_data[j]);
+      j++;
+    }
+
+    matched_str.clear();
+    match_len = ovector[3] - ovector[2];
+    j = 0;
+    while (j < match_len) {
+      matched_str += (char)input_data[ovector[2] + j];
+      j++;
+    }
+
+    if (replacement_map.find(matched_str) !=
+        replacement_map.end()) {
+      j = 0;
+      while (j < replacement_map[matched_str].length()) {
+        output_data.push_back(replacement_map[matched_str][j]);
+        j++;
+      }
+    } else {
+      j = 0;
+      while (j < matched_str.length()) {
+        output_data.push_back(matched_str[j]);
+        j++;
+      }
+    }
+
+    pos = ovector[3];
   }
+
+  pcre2_match_data_free(match_data);
+  pcre2_code_free(re);
 
   fout = fopen(output_file, "wb");
   if (!fout) {
