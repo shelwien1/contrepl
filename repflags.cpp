@@ -235,25 +235,17 @@ bool process_flags(const vector<::byte>& input_data,
   while (pos < input_data.size()) {
     rc = pcre2_match(re,
                      (PCRE2_SPTR)input_data.data(),
-                     input_data.size(), pos, 0,
+                     input_data.size(), pos,
+                     PCRE2_ANCHORED,
                      match_data, NULL);
 
     if (rc < 0) {
-      j = pos;
-      while (j < input_data.size()) {
-        output_data.push_back(input_data[j]);
-        j++;
-      }
-      break;
+      output_data.push_back(input_data[pos]);
+      pos++;
+      continue;
     }
 
     ovector = pcre2_get_ovector_pointer(match_data);
-
-    j = pos;
-    while (j < ovector[2]) {
-      output_data.push_back(input_data[j]);
-      j++;
-    }
 
     matched_str.clear();
     match_len = ovector[3] - ovector[2];
@@ -280,14 +272,10 @@ bool process_flags(const vector<::byte>& input_data,
       }
     }
 
-    j = 0;
-    while (j < match_len) {
-      fputc(flag, fout);
-      flags_written++;
-      j++;
-    }
+    fputc(flag, fout);
+    flags_written++;
 
-    pos = ovector[3];
+    pos++;
   }
 
   fclose(fout);
