@@ -280,14 +280,14 @@ bool process_flags(const vector<::byte>& input_data,
       }
     }
 
-    fputc(flag, fout);
-    flags_written++;
-
-    if (ovector[3] > pos) {
-      pos = ovector[3];
-    } else {
-      pos++;
+    j = 0;
+    while (j < match_len) {
+      fputc(flag, fout);
+      flags_written++;
+      j++;
     }
+
+    pos = ovector[3];
   }
 
   fclose(fout);
