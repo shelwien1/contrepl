@@ -225,7 +225,7 @@ bool process_flags(const char* input_file,
     pair_idx++;
   }
 
-  pattern += ")";
+  pattern += "|.)";
   if (lookahead.length() > 0) {
     pattern += "(?=";
     pattern += lookahead;
