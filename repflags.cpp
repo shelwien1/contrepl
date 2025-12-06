@@ -275,7 +275,7 @@ bool process_flags(const vector<::byte>& input_data,
     fputc(flag, fout);
     flags_written++;
 
-    pos++;
+    pos = ovector[3];
   }
 
   fclose(fout);
