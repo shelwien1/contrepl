@@ -1,2 +1,10 @@
 repl
 repflags
+
+# Generated test output files
+*.flg
+*.log
+*.logr
+*.out
+*.rst
+config_test.txt
