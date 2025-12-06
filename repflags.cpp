@@ -141,16 +141,15 @@ bool parse_config(const char* config_file, string& lookbehind,
   return true;
 }
 
-bool process_flags(const char* input_file,
+bool process_flags(const vector<::byte>& input_data,
+                   vector<::byte>& output_data,
                    const char* flag_file,
                    const string& lookbehind,
                    const string& lookahead,
                    const vector<ReplacementPair>& pairs,
                    bool decode) {
-  FILE *fin, *fout;
-  vector<::byte> input_data;
-  ::byte buffer[8192];
-  size_t n, i, j, pair_idx;
+  FILE* fout;
+  size_t j, pair_idx;
   pcre2_code* re;
   pcre2_match_data* match_data;
   PCRE2_SIZE* ovector;
@@ -159,35 +158,14 @@ bool process_flags(const char* input_file,
   int errornumber;
   PCRE2_SIZE erroroffset;
   char hex[3];
-  qword file_size, flags_written;
+  qword flags_written;
   map<string, string> replacement_map;
   string matched_str;
   size_t pos;
   PCRE2_SIZE match_len;
   char flag;
 
-  fin = fopen(input_file, "rb");
-  if (!fin) {
-    fprintf(stderr,
-      "Error: Cannot open input file: %s\n",
-      input_file);
-    return false;
-  }
-
-  file_size = 0;
-  while (1) {
-    n = fread(buffer, 1, sizeof(buffer), fin);
-    if (n == 0) break;
-    file_size += n;
-    i = 0;
-    while (i < n) {
-      input_data.push_back(buffer[i]);
-      i++;
-    }
-  }
-  fclose(fin);
-
-  fprintf(stderr, "Read %lld bytes from input\n", file_size);
+  output_data.clear();
 
   if (lookbehind.length() > 0) {
     pattern = "(?<=";
@@ -261,10 +239,21 @@ bool process_flags(const char* input_file,
                      match_data, NULL);
 
     if (rc < 0) {
+      j = pos;
+      while (j < input_data.size()) {
+        output_data.push_back(input_data[j]);
+        j++;
+      }
       break;
     }
 
     ovector = pcre2_get_ovector_pointer(match_data);
+
+    j = pos;
+    while (j < ovector[2]) {
+      output_data.push_back(input_data[j]);
+      j++;
+    }
 
     matched_str.clear();
     match_len = ovector[3] - ovector[2];
@@ -277,8 +266,18 @@ bool process_flags(const char* input_file,
     if (replacement_map.find(matched_str) !=
         replacement_map.end()) {
       flag = '1';
+      j = 0;
+      while (j < replacement_map[matched_str].length()) {
+        output_data.push_back(replacement_map[matched_str][j]);
+        j++;
+      }
     } else {
       flag = '0';
+      j = 0;
+      while (j < matched_str.length()) {
+        output_data.push_back(matched_str[j]);
+        j++;
+      }
     }
 
     fputc(flag, fout);
@@ -380,6 +379,11 @@ bool compare_flags(const char* fwd_file,
 int main(int argc, char* argv[]) {
   string lookbehind, lookahead;
   vector<ReplacementPair> pairs;
+  vector<::byte> input_data, fwd_output, bwd_output;
+  FILE* fin;
+  ::byte buffer[8192];
+  size_t n, i;
+  qword file_size;
 
   if (argc != 6) {
     fprintf(stderr,
@@ -398,16 +402,39 @@ int main(int argc, char* argv[]) {
     "Loaded %d replacement pairs\n",
     (int)pairs.size());
 
+  fin = fopen(argv[2], "rb");
+  if (!fin) {
+    fprintf(stderr,
+      "Error: Cannot open input file: %s\n",
+      argv[2]);
+    return 1;
+  }
+
+  file_size = 0;
+  while (1) {
+    n = fread(buffer, 1, sizeof(buffer), fin);
+    if (n == 0) break;
+    file_size += n;
+    i = 0;
+    while (i < n) {
+      input_data.push_back(buffer[i]);
+      i++;
+    }
+  }
+  fclose(fin);
+
+  fprintf(stderr, "Read %lld bytes from input\n", file_size);
+
   fprintf(stderr, "Pass 1: Forward replacements\n");
-  if (!process_flags(argv[2], argv[3], lookbehind, lookahead,
-                     pairs, false)) {
+  if (!process_flags(input_data, fwd_output, argv[3],
+                     lookbehind, lookahead, pairs, false)) {
     fprintf(stderr, "Error: Failed forward pass\n");
     return 1;
   }
 
   fprintf(stderr, "Pass 2: Backward replacements\n");
-  if (!process_flags(argv[2], argv[4], lookbehind, lookahead,
-                     pairs, true)) {
+  if (!process_flags(fwd_output, bwd_output, argv[4],
+                     lookbehind, lookahead, pairs, true)) {
     fprintf(stderr, "Error: Failed backward pass\n");
     return 1;
   }
