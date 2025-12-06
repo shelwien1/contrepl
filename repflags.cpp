@@ -225,7 +225,7 @@ bool process_flags(const char* input_file,
     pair_idx++;
   }
 
-  pattern += ")";
+  pattern += "|.*?)";
   if (lookahead.length() > 0) {
     pattern += "(?=";
     pattern += lookahead;
@@ -284,7 +284,11 @@ bool process_flags(const char* input_file,
     fputc(flag, fout);
     flags_written++;
 
-    pos = ovector[3];
+    if (ovector[3] > pos) {
+      pos = ovector[3];
+    } else {
+      pos++;
+    }
   }
 
   fclose(fout);
