@@ -17,8 +17,8 @@ open(my $fh, '<:raw', $input_file) or die "Cannot open $input_file: $!\n";
 my @lines = <$fh>;
 close($fh);
 
-# Remove trailing newlines but preserve content
-chomp(@lines);
+# Remove trailing newlines and carriage returns (handle Windows CRLF)
+s/[\r\n]+$// for @lines;
 
 if (@lines < 2) {
     die "Config file must have at least 2 lines (lookbehind and lookahead patterns)\n";
@@ -155,7 +155,7 @@ sub build_maps {
     return (\%forward, \%reverse);
 }
 
-# Apply replacements to a string
+# Apply replacements to a string (with assertions)
 # Sort by length descending to match longer strings first
 sub apply_replacement {
     my ($str, $map_ref, $lookbehind, $lookahead) = @_;
@@ -178,117 +178,140 @@ sub apply_replacement {
     return $str;
 }
 
-# Wrap string with boundary characters for testing
-sub with_boundary {
-    my $str = shift;
-    return " $str ";  # Space matches [^a-zA-Z']
-}
+# Apply replacements WITHOUT assertions (for conflict testing)
+sub apply_replacement_no_assert {
+    my ($str, $map_ref) = @_;
+    my %map = %$map_ref;
 
-# Remove boundary characters after testing
-sub strip_boundary {
-    my $str = shift;
-    $str =~ s/^ //;
-    $str =~ s/ $//;
+    return $str unless %map;
+
+    # Build regex: sort keys by length (longest first) to avoid partial matches
+    my @keys = sort { length($b) <=> length($a) } keys %map;
+
+    # Escape special regex characters in keys
+    my @escaped_keys = map { quotemeta($_) } @keys;
+
+    # Build the pattern without assertions
+    my $pattern = '(' . join('|', @escaped_keys) . ')';
+
+    # Apply replacement
+    $str =~ s/$pattern/$map{$1}/ge;
+
     return $str;
 }
 
 # Test all strings for round-trip consistency
+# Apply both regexps (without assertions) to all strings from both sides
 sub find_conflicts {
     my ($forward_ref, $reverse_ref) = @_;
     my @conflicts;
 
-    # Test all left strings: left -> right -> should get back left
+    # Test LEFT side strings: left -> forward -> reverse -> should equal left
     for my $left (keys %$forward_ref) {
         my $right = $forward_ref->{$left};
 
-        # Wrap with boundary characters so lookbehind/lookahead can match
-        my $test_str = with_boundary($left);
+        # Apply forward to get the right side
+        my $after_forward = apply_replacement_no_assert($left, $forward_ref);
+        # Apply reverse to get back to left
+        my $after_reverse = apply_replacement_no_assert($after_forward, $reverse_ref);
 
-        # Apply forward replacement to left
-        my $after_forward = apply_replacement($test_str, $forward_ref, $lookbehind, $lookahead);
-        # Apply reverse replacement
-        my $after_reverse = apply_replacement($after_forward, $reverse_ref, $lookbehind, $lookahead);
-
-        my $result = strip_boundary($after_reverse);
-        if ($result ne $left) {
+        if ($after_reverse ne $left) {
             push @conflicts, {
                 type => 'forward_then_reverse',
+                side => 'left',
                 original => $left,
-                after_forward => strip_boundary($after_forward),
-                after_reverse => $result,
+                expected_right => $right,
+                after_forward => $after_forward,
+                after_reverse => $after_reverse,
             };
         }
     }
 
-    # Test all right strings: right -> left -> should get back right
+    # Test RIGHT side strings: right -> reverse -> forward -> should equal right
     for my $right (keys %$reverse_ref) {
         my $left = $reverse_ref->{$right};
 
-        # Wrap with boundary characters
-        my $test_str = with_boundary($right);
+        # Apply reverse to get the left side
+        my $after_reverse = apply_replacement_no_assert($right, $reverse_ref);
+        # Apply forward to get back to right
+        my $after_forward = apply_replacement_no_assert($after_reverse, $forward_ref);
 
-        # Apply reverse replacement to right
-        my $after_reverse = apply_replacement($test_str, $reverse_ref, $lookbehind, $lookahead);
-        # Apply forward replacement
-        my $after_forward = apply_replacement($after_reverse, $forward_ref, $lookbehind, $lookahead);
-
-        my $result = strip_boundary($after_forward);
-        if ($result ne $right) {
+        if ($after_forward ne $right) {
             push @conflicts, {
                 type => 'reverse_then_forward',
+                side => 'right',
                 original => $right,
-                after_reverse => strip_boundary($after_reverse),
-                after_forward => $result,
+                expected_left => $left,
+                after_reverse => $after_reverse,
+                after_forward => $after_forward,
             };
         }
     }
 
-    # Test for substring conflicts where a right-side string contains a left-side pattern
-    # These could cause issues during forward replacement of text containing right-side strings
+    # Test for prefix overlap conflicts
+    # Example: "couldn't" -> "could not" and "couldn't've" -> "could not have"
+    # The string "couldn't have" (not in config) becomes:
+    #   forward: "could not have" (because "couldn't" -> "could not")
+    #   reverse: "couldn't've" (because "could not have" -> "couldn't've")
+    # But "couldn't've" != "couldn't have" -> CONFLICT
+
     for my $left1 (keys %$forward_ref) {
         my $right1 = $forward_ref->{$left1};
 
-        for my $left2 (keys %$forward_ref) {
-            next if $left1 eq $left2;
-
-            # Check if right1 contains left2 as a matchable substring (with valid boundaries)
-            my $test_right = with_boundary($right1);
-            my $after = apply_replacement($test_right, $forward_ref, $lookbehind, $lookahead);
-            my $result = strip_boundary($after);
-
-            if ($result ne $right1) {
-                # right1 got modified by forward replacement - this is a conflict
-                push @conflicts, {
-                    type => 'right_contains_left',
-                    original => $right1,
-                    contained => $left2,
-                    after_forward => $result,
-                    parent_left => $left1,
-                };
-            }
-        }
-    }
-
-    # Similarly, check if left-side strings contain right-side patterns
-    for my $right1 (keys %$reverse_ref) {
-        my $left1 = $reverse_ref->{$right1};
-
         for my $right2 (keys %$reverse_ref) {
             next if $right1 eq $right2;
+            my $left2 = $reverse_ref->{$right2};
 
-            # Check if left1 contains right2 as a matchable substring
-            my $test_left = with_boundary($left1);
-            my $after = apply_replacement($test_left, $reverse_ref, $lookbehind, $lookahead);
-            my $result = strip_boundary($after);
+            # Check if right1 is a proper prefix of right2
+            if (length($right2) > length($right1) &&
+                substr($right2, 0, length($right1)) eq $right1) {
 
-            if ($result ne $left1) {
-                push @conflicts, {
-                    type => 'left_contains_right',
-                    original => $left1,
-                    contained => $right2,
-                    after_reverse => $result,
-                    parent_right => $right1,
-                };
+                my $suffix = substr($right2, length($right1));
+                my $test_string = $left1 . $suffix;  # e.g., "couldn't" + " have" = "couldn't have"
+
+                # Apply forward
+                my $after_forward = apply_replacement_no_assert($test_string, $forward_ref);
+                # Apply reverse
+                my $after_reverse = apply_replacement_no_assert($after_forward, $reverse_ref);
+
+                if ($after_reverse ne $test_string) {
+                    push @conflicts, {
+                        type => 'prefix_overlap',
+                        original => $test_string,
+                        shorter_left => $left1,
+                        shorter_right => $right1,
+                        longer_right => $right2,
+                        longer_left => $left2,
+                        after_forward => $after_forward,
+                        after_reverse => $after_reverse,
+                    };
+                }
+            }
+
+            # Also check suffix overlap: right1 is a proper suffix of right2
+            if (length($right2) > length($right1) &&
+                substr($right2, -length($right1)) eq $right1) {
+
+                my $prefix = substr($right2, 0, length($right2) - length($right1));
+                my $test_string = $prefix . $left1;  # e.g., "something " + "couldn't"
+
+                # Apply forward
+                my $after_forward = apply_replacement_no_assert($test_string, $forward_ref);
+                # Apply reverse
+                my $after_reverse = apply_replacement_no_assert($after_forward, $reverse_ref);
+
+                if ($after_reverse ne $test_string) {
+                    push @conflicts, {
+                        type => 'suffix_overlap',
+                        original => $test_string,
+                        shorter_left => $left1,
+                        shorter_right => $right1,
+                        longer_right => $right2,
+                        longer_left => $left2,
+                        after_forward => $after_forward,
+                        after_reverse => $after_reverse,
+                    };
+                }
             }
         }
     }
@@ -339,56 +362,38 @@ while ($iteration < $max_iterations) {
     my %problematic_pairs;
 
     for my $conflict (@conflicts) {
-        print "  $conflict->{type}: '$conflict->{original}'";
         if ($conflict->{type} eq 'forward_then_reverse') {
-            print " -> '$conflict->{after_forward}' -> '$conflict->{after_reverse}'\n";
+            print "  $conflict->{type} ($conflict->{side}): '$conflict->{original}' -> '$conflict->{after_forward}' -> '$conflict->{after_reverse}'\n";
         } elsif ($conflict->{type} eq 'reverse_then_forward') {
-            print " -> '$conflict->{after_reverse}' -> '$conflict->{after_forward}'\n";
-        } elsif ($conflict->{type} eq 'right_contains_left') {
-            print " (right side of '$conflict->{parent_left}') contains matchable '$conflict->{contained}' -> '$conflict->{after_forward}'\n";
-        } elsif ($conflict->{type} eq 'left_contains_right') {
-            print " (left side of '$conflict->{parent_right}') contains matchable '$conflict->{contained}' -> '$conflict->{after_reverse}'\n";
-        } else {
-            print "\n";
+            print "  $conflict->{type} ($conflict->{side}): '$conflict->{original}' -> '$conflict->{after_reverse}' -> '$conflict->{after_forward}'\n";
+        } elsif ($conflict->{type} eq 'prefix_overlap' || $conflict->{type} eq 'suffix_overlap') {
+            print "  $conflict->{type}: '$conflict->{original}' -> '$conflict->{after_forward}' -> '$conflict->{after_reverse}'\n";
+            print "    Shorter pair: '$conflict->{shorter_left}' <-> '$conflict->{shorter_right}'\n";
+            print "    Longer pair:  '$conflict->{longer_left}' <-> '$conflict->{longer_right}'\n";
         }
 
-        # Find which pairs are involved
-        # The problematic pair is likely the one whose left/right appears as a substring
+        # Find which pairs are involved in causing this conflict
         for my $i (0 .. $#pairs) {
             next if $pairs[$i]{removed};
             my $left = $pairs[$i]{left};
             my $right = $pairs[$i]{right};
 
-            # Check if this pair's pattern is causing the issue
             if ($conflict->{type} eq 'forward_then_reverse') {
-                # Check if the right side contains another left pattern
-                for my $j (0 .. $#pairs) {
-                    next if $pairs[$j]{removed};
-                    next if $i == $j;
-                    my $other_left = $pairs[$j]{left};
-                    if ($right =~ /\Q$other_left\E/ && $conflict->{original} eq $left) {
-                        # This pair's right contains another pair's left
-                        $problematic_pairs{$i}++;
-                    }
-                }
-            } elsif ($conflict->{type} eq 'reverse_then_forward') {
-                # Check if the left side contains another right pattern
-                for my $j (0 .. $#pairs) {
-                    next if $pairs[$j]{removed};
-                    next if $i == $j;
-                    my $other_right = $pairs[$j]{right};
-                    if ($left =~ /\Q$other_right\E/ && $conflict->{original} eq $right) {
-                        $problematic_pairs{$i}++;
-                    }
-                }
-            } elsif ($conflict->{type} eq 'right_contains_left') {
-                # The contained pattern is the shorter/problematic one
-                if ($left eq $conflict->{contained}) {
+                if ($conflict->{after_forward} =~ /\Q$right\E/ &&
+                    $conflict->{after_forward} ne $conflict->{original} &&
+                    $conflict->{original} ne $left) {
                     $problematic_pairs{$i}++;
                 }
-            } elsif ($conflict->{type} eq 'left_contains_right') {
-                # The contained pattern is the shorter/problematic one
-                if ($right eq $conflict->{contained}) {
+            } elsif ($conflict->{type} eq 'reverse_then_forward') {
+                if ($conflict->{after_reverse} =~ /\Q$left\E/ &&
+                    $conflict->{after_reverse} ne $conflict->{original} &&
+                    $conflict->{original} ne $right) {
+                    $problematic_pairs{$i}++;
+                }
+            } elsif ($conflict->{type} eq 'prefix_overlap' || $conflict->{type} eq 'suffix_overlap') {
+                # The shorter pair causes the conflict - it creates a right-side string
+                # that combines with suffix to match the longer pair's right
+                if ($left eq $conflict->{shorter_left} && $right eq $conflict->{shorter_right}) {
                     $problematic_pairs{$i}++;
                 }
             }
