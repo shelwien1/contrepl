@@ -315,28 +315,41 @@ void mode_compress(const char* cfg_file, const char* in_file,
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
   // Simulate backward replacement to generate flags
-  offset = 0;
-  vector<bool> seen_pos(intermediate.length(), false);
+  // We need to actually modify a simulated string to match Perl behavior
+  string simulated;
+  vector<qword> sim_to_int_pos;
+  simulated = intermediate;
 
-  while (offset < intermediate.length()) {
+  // Initially, simulated position maps 1:1 to intermediate position
+  for (i = 0; i < intermediate.length(); i++) {
+    sim_to_int_pos.push_back(i);
+  }
+
+  offset = 0;
+  map<qword, bool> seen_sim_pos;
+
+  while (offset < simulated.length()) {
     rc = pcre2_match(bwd_re,
-                     (PCRE2_SPTR)intermediate.c_str(),
-                     intermediate.length(),
+                     (PCRE2_SPTR)simulated.c_str(),
+                     simulated.length(),
                      offset, 0, match_data, NULL);
 
     if (rc < 0) break;
 
     ovector = pcre2_get_ovector_pointer(match_data);
-    PCRE2_SIZE int_pos;
-    int_pos = ovector[0];
-    PCRE2_SIZE int_end;
-    int_end = ovector[1];
+    PCRE2_SIZE sim_pos, sim_end;
+    sim_pos = ovector[0];
+    sim_end = ovector[1];
 
-    if (!seen_pos[int_pos]) {
-      seen_pos[int_pos] = true;
+    // Map simulated position back to intermediate position
+    qword int_pos;
+    int_pos = sim_to_int_pos[sim_pos];
+
+    if (seen_sim_pos.find(sim_pos) == seen_sim_pos.end()) {
+      seen_sim_pos[sim_pos] = true;
 
       string match_str;
-      match_str = intermediate.substr(int_pos, int_end - int_pos);
+      match_str = simulated.substr(sim_pos, sim_end - sim_pos);
       string repl;
       repl = backward[match_str];
 
@@ -352,10 +365,42 @@ void mode_compress(const char* cfg_file, const char* in_file,
       }
 
       flags += should ? '1' : '0';
-    }
 
-    offset = int_end;
-    if (offset == int_pos) offset++;
+      // If we should replace, modify simulated and update position map
+      if (should) {
+        // Replace in simulated string
+        string before, after;
+        before = simulated.substr(0, sim_pos);
+        after = simulated.substr(sim_end);
+        simulated = before + repl + after;
+
+        // Update position mapping
+        vector<qword> new_map;
+        qword j;
+        // Copy positions before replacement
+        for (j = 0; j < sim_pos; j++) {
+          new_map.push_back(sim_to_int_pos[j]);
+        }
+        // Add positions for replacement (all map to same int_pos)
+        for (j = 0; j < repl.length(); j++) {
+          new_map.push_back(int_pos);
+        }
+        // Copy positions after replacement
+        for (j = sim_end; j < sim_to_int_pos.size(); j++) {
+          new_map.push_back(sim_to_int_pos[j]);
+        }
+        sim_to_int_pos = new_map;
+
+        // Continue from after the replacement
+        offset = sim_pos + repl.length();
+      } else {
+        // Don't replace, continue from next position
+        offset = sim_pos + 1;
+      }
+    } else {
+      // Already seen this position, skip
+      offset = sim_pos + 1;
+    }
   }
 
   pcre2_match_data_free(match_data);
@@ -468,10 +513,11 @@ void mode_decompress(const char* cfg_file, const char* in_file,
       result += backward[match_str];
 
       last_end = end;
+      offset = end;
+    } else {
+      // Don't replace, continue from next position
+      offset = pos + 1;
     }
-
-    offset = end;
-    if (offset == pos) offset++;
   }
 
   // Add remaining portion
