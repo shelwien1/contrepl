@@ -391,9 +391,9 @@ while ($iteration < $max_iterations) {
                     $problematic_pairs{$i}++;
                 }
             } elsif ($conflict->{type} eq 'prefix_overlap' || $conflict->{type} eq 'suffix_overlap') {
-                # The shorter pair causes the conflict - it creates a right-side string
-                # that combines with suffix to match the longer pair's right
-                if ($left eq $conflict->{shorter_left} && $right eq $conflict->{shorter_right}) {
+                # Remove the LONGER pair to keep the more common shorter contractions
+                # e.g., keep "shouldn't" <-> "should not", remove "shouldn't've" <-> "should not have"
+                if ($left eq $conflict->{longer_left} && $right eq $conflict->{longer_right}) {
                     $problematic_pairs{$i}++;
                 }
             }
