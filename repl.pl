@@ -79,49 +79,27 @@ if ($last_end < length($original)) {
     push @orig_pos, ($last_end .. length($original) - 1);
 }
 
-# Collect all backward matches using (*FAIL) trick
-my @bwd_matches;
-my %seen_pos;
-
-sub collect_match {
-    return if $seen_pos{$-[0]}++;
-    push @bwd_matches, [$-[0], $1];
-}
-
-eval "\$intermediate =~ /(?<=$lb)($bwd_alt)(?=$la)(?{ collect_match() })(*FAIL)/gs;";
-
-# Compute preliminary flags (would this restore original?)
-my @preliminary;
-for my $m (@bwd_matches) {
-    my ($start, $match) = @$m;
-    my $repl = $backward{$match};
-    my $orig_start = $orig_pos[$start];
-    my $orig_substr = substr($original, $orig_start, length($repl));
-    push @preliminary, ($orig_substr eq $repl) ? 1 : 0;
-}
-
-# Simulate left-to-right replacement, computing position offsets
-my @final_flags = (0) x scalar(@bwd_matches);
+# Generate flags via single simulation pass
 my $simulated = $intermediate;
-my $offset = 0;
+my $flags = '';
+my @seen_pos;
+my $int_len = length($intermediate);
 
-for my $i (0 .. $#bwd_matches) {
-    next unless $preliminary[$i];
+sub sim_check {
+    my $int_pos = $-[0];  # positions are in original intermediate, not modified
+    return 0 if $seen_pos[$int_pos]++;
     
-    my ($orig_pos, $match) = @{$bwd_matches[$i]};
-    my $adj_pos = $orig_pos + $offset;
-    my $match_len = length($match);
+    my $match = $1;
+    my $repl = $backward{$match};
+    my $orig_start = $orig_pos[$int_pos];
+    my $orig_substr = substr($original, $orig_start, length($repl));
     
-    my $current = substr($simulated, $adj_pos, $match_len);
-    if ($current eq $match) {
-        my $repl = $backward{$match};
-        substr($simulated, $adj_pos, $match_len) = $repl;
-        $offset += length($repl) - $match_len;
-        $final_flags[$i] = 1;
-    }
+    my $should = ($orig_substr eq $repl);
+    $flags .= $should ? '1' : '0';
+    return $should;
 }
 
-my $flags = join '', @final_flags;
+eval "\$simulated =~ s/(?<=$lb)($bwd_alt)(?=$la)(?(?{ sim_check() })|(*FAIL))/\$backward{\$1}/ge;";
 
 # Write outputs
 open my $out, '>:raw', $out_file or die "Cannot open $out_file: $!";
