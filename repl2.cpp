@@ -1,14 +1,28 @@
+//#include "mim-include/mimalloc-new-delete.h"
+
 #define _FILE_OFFSET_BITS 64
 #define PCRE2_CODE_UNIT_WIDTH 8
 
+#include <map>
+#include <pcre2.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <pcre2.h>
-#include <vector>
 #include <string>
-#include <map>
+#include <vector>
+
+//#define pcre2_jit_compile(x,y) 0
+
+#ifdef _WIN32
+#define off64_t __int64
+#define ftello64 _ftelli64
+#define fseeko64 _fseeki64
+#elif defined(__APPLE__) || defined(__CYGWIN__)
+#define off64_t off_t
+#define ftello64 ftello
+#define fseeko64 fseeko
+#endif
 
 using namespace std;
 
@@ -22,7 +36,7 @@ struct ReplacementPair {
   string to;
 };
 
-void decode_escapes(string& s) {
+void decode_escapes(string &s) {
   string result;
   size_t i, len;
   len = s.length();
@@ -61,10 +75,10 @@ void decode_escapes(string& s) {
   s = result;
 }
 
-string read_file(const char* path) {
-  FILE* f;
+string read_file(const char *path) {
+  FILE *f;
   qword size;
-  char* buffer;
+  char *buffer;
   string result;
 
   f = fopen(path, "rb");
@@ -77,7 +91,7 @@ string read_file(const char* path) {
   size = ftello64(f);
   fseeko64(f, 0, SEEK_SET);
 
-  buffer = (char*)malloc(size + 1);
+  buffer = (char *)malloc(size + 1);
   if (!buffer) {
     fprintf(stderr, "Memory allocation failed\n");
     exit(1);
@@ -92,19 +106,7 @@ string read_file(const char* path) {
   return result;
 }
 
-void write_file(const char* path, const string& data) {
-  FILE* f;
-  f = fopen(path, "wb");
-  if (!f) {
-    fprintf(stderr, "Cannot open %s for writing\n", path);
-    exit(1);
-  }
-  fwrite(data.c_str(), 1, data.length(), f);
-  fclose(f);
-}
-
-void parse_config(const char* cfg_file, string& lb, string& la,
-                  vector<ReplacementPair>& pairs) {
+void parse_config(const char *cfg_file, string &lb, string &la, vector<ReplacementPair> &pairs) {
   string cfg_data;
   size_t pos, line_start, line_end;
   int line_num;
@@ -149,7 +151,7 @@ void parse_config(const char* cfg_file, string& lb, string& la,
   }
 }
 
-string regex_quote(const string& s) {
+string regex_quote(const string &s) {
   string result;
   size_t i;
   for (i = 0; i < s.length(); i++) {
@@ -163,8 +165,8 @@ string regex_quote(const string& s) {
   return result;
 }
 
-string build_alternation(const vector<string>& keys) {
-  vector<pair<size_t, string> > sorted;
+string build_alternation(const vector<string> &keys) {
+  vector<pair<size_t, string>> sorted;
   string result;
   size_t i;
 
@@ -186,25 +188,25 @@ string build_alternation(const vector<string>& keys) {
   }
 
   for (i = 0; i < sorted.size(); i++) {
-    if (i > 0) result += '|';
+    if (i > 0)
+      result += '|';
     result += regex_quote(sorted[i].second);
   }
 
   return result;
 }
 
-void mode_compress(const char* cfg_file, const char* in_file,
-                   const char* out_file, const char* flg_file) {
+void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
   string lb, la, original, intermediate, flags;
   vector<ReplacementPair> pairs;
   map<string, string> forward, backward;
   vector<string> forward_keys, backward_keys;
   vector<qword> orig_pos;
-  pcre2_code* fwd_re;
-  pcre2_code* bwd_re;
-  pcre2_match_data* match_data;
+  pcre2_code *fwd_re;
+  pcre2_code *bwd_re;
+  pcre2_match_data *match_data;
   int rc;
-  PCRE2_SIZE* ovector;
+  PCRE2_SIZE *ovector;
   PCRE2_SIZE offset;
   string fwd_pattern, bwd_pattern;
   size_t i;
@@ -230,15 +232,17 @@ void mode_compress(const char* cfg_file, const char* in_file,
   original = read_file(in_file);
 
   // Build forward regex pattern
-  fwd_pattern = "(?<=" + lb + ")(" +
-                build_alternation(forward_keys) + ")(?=" + la + ")";
+  fwd_pattern = "(?<=" + lb + ")(" + build_alternation(forward_keys) + ")(?=" + la + ")";
 
   // Compile forward regex
-  int errcode;
+  int errcode=-1;
+
+  pcre2_config(PCRE2_CONFIG_JIT, &errcode);
+printf( "!JIT=%i!\n", errcode );
+
   PCRE2_SIZE erroffset;
-  fwd_re = pcre2_compile((PCRE2_SPTR)fwd_pattern.c_str(),
-                         PCRE2_ZERO_TERMINATED, 0,
-                         &errcode, &erroffset, NULL);
+  fwd_re = pcre2_compile((PCRE2_SPTR)fwd_pattern.c_str(), PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
+  pcre2_jit_compile(fwd_re, PCRE2_JIT_COMPLETE);
 
   if (!fwd_re) {
     fprintf(stderr, "PCRE2 compilation failed\n");
@@ -253,12 +257,10 @@ void mode_compress(const char* cfg_file, const char* in_file,
   last_end = 0;
 
   while (offset < original.length()) {
-    rc = pcre2_match(fwd_re,
-                     (PCRE2_SPTR)original.c_str(),
-                     original.length(),
-                     offset, 0, match_data, NULL);
+    rc = pcre2_match(fwd_re, (PCRE2_SPTR)original.c_str(), original.length(), offset, 0, match_data, NULL);
 
-    if (rc < 0) break;
+    if (rc < 0)
+      break;
 
     ovector = pcre2_get_ovector_pointer(match_data);
     PCRE2_SIZE start, end;
@@ -285,7 +287,8 @@ void mode_compress(const char* cfg_file, const char* in_file,
 
     last_end = end;
     offset = end;
-    if (offset == start) offset++;
+    if (offset == start)
+      offset++;
   }
 
   // Add remaining portion
@@ -300,12 +303,10 @@ void mode_compress(const char* cfg_file, const char* in_file,
   pcre2_code_free(fwd_re);
 
   // Build backward regex pattern
-  bwd_pattern = "(?<=" + lb + ")(" +
-                build_alternation(backward_keys) + ")(?=" + la + ")";
+  bwd_pattern = "(?<=" + lb + ")(" + build_alternation(backward_keys) + ")(?=" + la + ")";
 
-  bwd_re = pcre2_compile((PCRE2_SPTR)bwd_pattern.c_str(),
-                         PCRE2_ZERO_TERMINATED, 0,
-                         &errcode, &erroffset, NULL);
+  bwd_re = pcre2_compile((PCRE2_SPTR)bwd_pattern.c_str(), PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
+  pcre2_jit_compile(bwd_re, PCRE2_JIT_COMPLETE);
 
   if (!bwd_re) {
     fprintf(stderr, "PCRE2 compilation failed\n");
@@ -329,17 +330,15 @@ void mode_compress(const char* cfg_file, const char* in_file,
   map<qword, bool> seen_sim_pos;
 
   while (offset < simulated.length()) {
-    rc = pcre2_match(bwd_re,
-                     (PCRE2_SPTR)simulated.c_str(),
-                     simulated.length(),
-                     offset, 0, match_data, NULL);
-
-    if (rc < 0) break;
+    rc = pcre2_match(bwd_re, (PCRE2_SPTR)simulated.c_str(), simulated.length(), offset, 0, match_data, NULL);
+    if( rc<0 ) break;
 
     ovector = pcre2_get_ovector_pointer(match_data);
     PCRE2_SIZE sim_pos, sim_end;
     sim_pos = ovector[0];
     sim_end = ovector[1];
+
+//printf( "%6i: %i\n", int(sim_pos), int(original.substr(0,sim_pos)==simulated.substr(0,sim_pos)) );
 
     // Map simulated position back to intermediate position
     qword int_pos;
@@ -366,39 +365,35 @@ void mode_compress(const char* cfg_file, const char* in_file,
 
       flags += should ? '1' : '0';
 
-      // If we should replace, modify simulated and update position map
       if (should) {
-        // Replace in simulated string
-        string before, after;
-        before = simulated.substr(0, sim_pos);
-        after = simulated.substr(sim_end);
-        simulated = before + repl + after;
+        qword match_len, repl_len;
+        match_len = sim_end - sim_pos;
+        repl_len = repl.length();
 
-        // Update position mapping
-        vector<qword> new_map;
-        qword j;
-        // Copy positions before replacement
-        for (j = 0; j < sim_pos; j++) {
-          new_map.push_back(sim_to_int_pos[j]);
-        }
-        // Add positions for replacement (all map to same int_pos)
-        for (j = 0; j < repl.length(); j++) {
-          new_map.push_back(int_pos);
-        }
-        // Copy positions after replacement
-        for (j = sim_end; j < sim_to_int_pos.size(); j++) {
-          new_map.push_back(sim_to_int_pos[j]);
-        }
-        sim_to_int_pos = new_map;
+        // Replace in simulated string (more efficient than concatenation)
+        simulated.replace(sim_pos, match_len, repl);
 
-        // Continue from after the replacement
-        offset = sim_pos + repl.length();
+        // Update position mapping more efficiently
+        if (repl_len != match_len) {
+          if (repl_len > match_len) {
+            // Insert new positions
+            sim_to_int_pos.insert(sim_to_int_pos.begin() + sim_end, repl_len - match_len, int_pos);
+          } else {
+            // Remove positions
+            sim_to_int_pos.erase(sim_to_int_pos.begin() + sim_pos + repl_len, sim_to_int_pos.begin() + sim_end);
+          }
+        }
+
+        // Update existing positions in the replacement range
+        for (qword j = sim_pos; j < sim_pos + repl_len; j++) {
+          sim_to_int_pos[j] = int_pos;
+        }
+
+        offset = sim_pos + repl_len;
       } else {
-        // Don't replace, continue from next position
         offset = sim_pos + 1;
       }
     } else {
-      // Already seen this position, skip
       offset = sim_pos + 1;
     }
   }
@@ -406,26 +401,39 @@ void mode_compress(const char* cfg_file, const char* in_file,
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
-  write_file(out_file, intermediate);
-  write_file(flg_file, flags);
+  // Write output file
+  FILE *out;
+  out = fopen(out_file, "wb");
+  if (!out) {
+    fprintf(stderr, "Cannot open %s for writing\n", out_file);
+    exit(1);
+  }
+  fwrite(intermediate.c_str(), 1, intermediate.length(), out);
+  fclose(out);
 
-  fprintf(stderr,
-          "Original: %llu bytes, Output: %llu bytes, Flags: %llu\n",
-          (unsigned long long)original.length(),
-          (unsigned long long)intermediate.length(),
-          (unsigned long long)flags.length());
+  // Write flags file
+  FILE *flg;
+  flg = fopen(flg_file, "wb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
+    exit(1);
+  }
+  fwrite(flags.c_str(), 1, flags.length(), flg);
+  fclose(flg);
+
+  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags.length());
 }
 
-void mode_decompress(const char* cfg_file, const char* in_file,
-                     const char* out_file, const char* flg_file) {
-  string lb, la, data, flags;
+void mode_decompress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
+  string lb, la, data;
+  vector<bool> flags;
   vector<ReplacementPair> pairs;
   map<string, string> backward;
   vector<string> backward_keys;
-  pcre2_code* bwd_re;
-  pcre2_match_data* match_data;
+  pcre2_code *bwd_re;
+  pcre2_match_data *match_data;
   int rc;
-  PCRE2_SIZE* ovector;
+  PCRE2_SIZE *ovector;
   PCRE2_SIZE offset;
   string bwd_pattern;
   size_t i;
@@ -448,17 +456,21 @@ void mode_decompress(const char* cfg_file, const char* in_file,
 
   data = read_file(in_file);
   in_len = data.length();
-  flags = read_file(flg_file);
+
+  // Read flags into vector<bool>
+  string flags_str;
+  flags_str = read_file(flg_file);
+  for (i = 0; i < flags_str.length(); i++) {
+    flags.push_back(flags_str[i] == '1');
+  }
 
   // Build backward regex pattern
-  bwd_pattern = "(?<=" + lb + ")(" +
-                build_alternation(backward_keys) + ")(?=" + la + ")";
+  bwd_pattern = "(?<=" + lb + ")(" + build_alternation(backward_keys) + ")(?=" + la + ")";
 
   int errcode;
   PCRE2_SIZE erroffset;
-  bwd_re = pcre2_compile((PCRE2_SPTR)bwd_pattern.c_str(),
-                         PCRE2_ZERO_TERMINATED, 0,
-                         &errcode, &erroffset, NULL);
+  bwd_re = pcre2_compile((PCRE2_SPTR)bwd_pattern.c_str(), PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
+  pcre2_jit_compile(bwd_re, PCRE2_JIT_COMPLETE);
 
   if (!bwd_re) {
     fprintf(stderr, "PCRE2 compilation failed\n");
@@ -467,22 +479,29 @@ void mode_decompress(const char* cfg_file, const char* in_file,
 
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
-  // Apply replacements using flags
-  string result;
+  // Open output file for writing
+  FILE *out;
+  out = fopen(out_file, "wb");
+  if (!out) {
+    fprintf(stderr, "Cannot open %s for writing\n", out_file);
+    exit(1);
+  }
+
+  // Apply replacements using flags, write directly to file
   offset = 0;
   qword last_end;
   qword flag_idx;
+  qword bytes_written;
   last_end = 0;
   flag_idx = 0;
+  bytes_written = 0;
   vector<bool> seen_pos(data.length(), false);
 
   while (offset < data.length()) {
-    rc = pcre2_match(bwd_re,
-                     (PCRE2_SPTR)data.c_str(),
-                     data.length(),
-                     offset, 0, match_data, NULL);
+    rc = pcre2_match(bwd_re, (PCRE2_SPTR)data.c_str(), data.length(), offset, 0, match_data, NULL);
 
-    if (rc < 0) break;
+    if (rc < 0)
+      break;
 
     ovector = pcre2_get_ovector_pointer(match_data);
     PCRE2_SIZE pos, end;
@@ -495,22 +514,28 @@ void mode_decompress(const char* cfg_file, const char* in_file,
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
 
-      if (flag_idx < flags.length()) {
-        should_replace = (flags[flag_idx] == '1');
+      if (flag_idx < flags.size()) {
+        should_replace = flags[flag_idx];
         flag_idx++;
       }
     }
 
     if (should_replace) {
-      // Add unmatched portion before this match
+      // Write unmatched portion before this match
       if (pos > last_end) {
-        result += data.substr(last_end, pos - last_end);
+        qword len;
+        len = pos - last_end;
+        fwrite(data.c_str() + last_end, 1, len, out);
+        bytes_written += len;
       }
 
-      // Add replacement
+      // Write replacement
       string match_str;
       match_str = data.substr(pos, end - pos);
-      result += backward[match_str];
+      string repl;
+      repl = backward[match_str];
+      fwrite(repl.c_str(), 1, repl.length(), out);
+      bytes_written += repl.length();
 
       last_end = end;
       offset = end;
@@ -520,25 +545,25 @@ void mode_decompress(const char* cfg_file, const char* in_file,
     }
   }
 
-  // Add remaining portion
+  // Write remaining portion
   if (last_end < data.length()) {
-    result += data.substr(last_end);
+    qword len;
+    len = data.length() - last_end;
+    fwrite(data.c_str() + last_end, 1, len, out);
+    bytes_written += len;
   }
 
+  fclose(out);
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
-  write_file(out_file, result);
-
   fprintf(stderr,
-          "Input: %llu bytes, Restored: %llu bytes, "
-          "Flags used: %llu\n",
-          (unsigned long long)in_len,
-          (unsigned long long)result.length(),
-          (unsigned long long)flag_idx);
+          "Input: %lu bytes, Restored: %lu bytes, "
+          "Flags used: %lu\n",
+          (qword)in_len, (qword)bytes_written, (qword)flag_idx);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   if (argc != 6) {
     fprintf(stderr,
             "Usage: %s <mode> <config> <input> <output> <flags>\n"
