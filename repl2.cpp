@@ -3,13 +3,14 @@
 #define _FILE_OFFSET_BITS 64
 #define PCRE2_CODE_UNIT_WIDTH 8
 
-#include <map>
 #include <pcre2.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 //#define pcre2_jit_compile(x,y) 0
@@ -151,10 +152,10 @@ void parse_config(const char *cfg_file, string &lb, string &la, vector<Replaceme
   }
 }
 
-string regex_quote(const string &s) {
+string regex_quote(string_view s) {
   string result;
-  size_t i;
-  for (i = 0; i < s.length(); i++) {
+  result.reserve(s.length() * 2);
+  for (size_t i = 0; i < s.length(); i++) {
     char c;
     c = s[i];
     if (strchr(".^$*+?()[{\\|", c)) {
@@ -165,11 +166,12 @@ string regex_quote(const string &s) {
   return result;
 }
 
-string build_alternation(const vector<string> &keys) {
-  vector<pair<size_t, string>> sorted;
+string build_alternation(const vector<string_view> &keys) {
+  vector<pair<size_t, string_view>> sorted;
   string result;
   size_t i;
 
+  sorted.reserve(keys.size());
   for (i = 0; i < keys.size(); i++) {
     sorted.push_back(make_pair(keys[i].length(), keys[i]));
   }
@@ -179,7 +181,7 @@ string build_alternation(const vector<string> &keys) {
     size_t j;
     for (j = i + 1; j < sorted.size(); j++) {
       if (sorted[j].first > sorted[i].first) {
-        pair<size_t, string> temp;
+        pair<size_t, string_view> temp;
         temp = sorted[i];
         sorted[i] = sorted[j];
         sorted[j] = temp;
@@ -199,8 +201,8 @@ string build_alternation(const vector<string> &keys) {
 void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
   string lb, la, original, intermediate, flags;
   vector<ReplacementPair> pairs;
-  map<string, string> forward, backward;
-  vector<string> forward_keys, backward_keys;
+  unordered_map<string_view, string_view> forward, backward;
+  vector<string_view> forward_keys, backward_keys;
   pcre2_code *fwd_re;
   pcre2_code *bwd_re;
   pcre2_match_data *match_data;
@@ -217,18 +219,27 @@ void mode_compress(const char *cfg_file, const char *in_file, const char *out_fi
     exit(1);
   }
 
-  // Build forward and backward maps
-  for (i = 0; i < pairs.size(); i++) {
-    forward[pairs[i].from] = pairs[i].to;
-    forward_keys.push_back(pairs[i].from);
+  // Reserve space for vectors
+  forward_keys.reserve(pairs.size());
+  backward_keys.reserve(pairs.size());
 
-    if (backward.find(pairs[i].to) == backward.end()) {
-      backward[pairs[i].to] = pairs[i].from;
-      backward_keys.push_back(pairs[i].to);
+  // Build forward and backward maps (using string_view references to pairs)
+  for (i = 0; i < pairs.size(); i++) {
+    string_view from_view(pairs[i].from);
+    string_view to_view(pairs[i].to);
+    forward[from_view] = to_view;
+    forward_keys.push_back(from_view);
+
+    if (backward.find(to_view) == backward.end()) {
+      backward[to_view] = from_view;
+      backward_keys.push_back(to_view);
     }
   }
 
   original = read_file(in_file);
+
+  // Reserve space for intermediate output
+  intermediate.reserve(original.length());
 
   // Build forward regex pattern
   fwd_pattern = "(?<=" + lb + ")(" + build_alternation(forward_keys) + ")(?=" + la + ")";
@@ -272,10 +283,8 @@ printf( "!JIT=%i!\n", errcode );
     }
 
     // Add replacement
-    string match_str;
-    match_str = original.substr(start, end - start);
-    string repl;
-    repl = forward[match_str];
+    string_view match_str(original.data() + start, end - start);
+    string_view repl = forward[match_str];
     intermediate += repl;
 
     last_end = end;
@@ -312,7 +321,7 @@ printf( "!JIT=%i!\n", errcode );
   simulated = intermediate;
 
   offset = 0;
-  map<qword, bool> seen_sim_pos;
+  vector<bool> seen_sim_pos(simulated.length(), false);
 
   while (offset < simulated.length()) {
     rc = pcre2_match(bwd_re, (PCRE2_SPTR)simulated.c_str(), simulated.length(), offset, 0, match_data, NULL);
@@ -323,21 +332,18 @@ printf( "!JIT=%i!\n", errcode );
     sim_pos = ovector[0];
     sim_end = ovector[1];
 
-    if (seen_sim_pos.find(sim_pos) == seen_sim_pos.end()) {
+    if (!seen_sim_pos[sim_pos]) {
       seen_sim_pos[sim_pos] = true;
 
-      string match_str;
-      match_str = simulated.substr(sim_pos, sim_end - sim_pos);
-      string repl;
-      repl = backward[match_str];
+      string_view match_str(simulated.data() + sim_pos, sim_end - sim_pos);
+      string_view repl = backward[match_str];
 
       // Use sim_pos directly as position in original (they're always equal up to sim_pos)
       bool should;
       should = false;
       if (sim_pos + repl.length() <= original.length()) {
-        string orig_substr;
-        orig_substr = original.substr(sim_pos, repl.length());
-        should = (orig_substr == repl);
+        string_view orig_view(original.data() + sim_pos, repl.length());
+        should = (orig_view == repl);
       }
 
       flags += should ? '1' : '0';
@@ -389,8 +395,8 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   string lb, la, data;
   vector<bool> flags;
   vector<ReplacementPair> pairs;
-  map<string, string> backward;
-  vector<string> backward_keys;
+  unordered_map<string_view, string_view> backward;
+  vector<string_view> backward_keys;
   pcre2_code *bwd_re;
   pcre2_match_data *match_data;
   int rc;
@@ -407,11 +413,16 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     exit(1);
   }
 
-  // Build backward map
+  // Reserve space for vectors
+  backward_keys.reserve(pairs.size());
+
+  // Build backward map (using string_view references to pairs)
   for (i = 0; i < pairs.size(); i++) {
-    if (backward.find(pairs[i].to) == backward.end()) {
-      backward[pairs[i].to] = pairs[i].from;
-      backward_keys.push_back(pairs[i].to);
+    string_view from_view(pairs[i].from);
+    string_view to_view(pairs[i].to);
+    if (backward.find(to_view) == backward.end()) {
+      backward[to_view] = from_view;
+      backward_keys.push_back(to_view);
     }
   }
 
@@ -421,6 +432,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   // Read flags into vector<bool>
   string flags_str;
   flags_str = read_file(flg_file);
+  flags.reserve(flags_str.length());
   for (i = 0; i < flags_str.length(); i++) {
     flags.push_back(flags_str[i] == '1');
   }
@@ -491,11 +503,9 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
       }
 
       // Write replacement
-      string match_str;
-      match_str = data.substr(pos, end - pos);
-      string repl;
-      repl = backward[match_str];
-      fwrite(repl.c_str(), 1, repl.length(), out);
+      string_view match_str(data.data() + pos, end - pos);
+      string_view repl = backward[match_str];
+      fwrite(repl.data(), 1, repl.length(), out);
       bytes_written += repl.length();
 
       last_end = end;
