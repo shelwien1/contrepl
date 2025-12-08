@@ -201,7 +201,6 @@ void mode_compress(const char *cfg_file, const char *in_file, const char *out_fi
   vector<ReplacementPair> pairs;
   map<string, string> forward, backward;
   vector<string> forward_keys, backward_keys;
-  vector<qword> orig_pos;
   pcre2_code *fwd_re;
   pcre2_code *bwd_re;
   pcre2_match_data *match_data;
@@ -270,9 +269,6 @@ printf( "!JIT=%i!\n", errcode );
     // Add unmatched portion
     if (start > last_end) {
       intermediate += original.substr(last_end, start - last_end);
-      for (qword p = last_end; p < start; p++) {
-        orig_pos.push_back(p);
-      }
     }
 
     // Add replacement
@@ -281,9 +277,6 @@ printf( "!JIT=%i!\n", errcode );
     string repl;
     repl = forward[match_str];
     intermediate += repl;
-    for (size_t r = 0; r < repl.length(); r++) {
-      orig_pos.push_back(start);
-    }
 
     last_end = end;
     offset = end;
@@ -294,9 +287,6 @@ printf( "!JIT=%i!\n", errcode );
   // Add remaining portion
   if (last_end < original.length()) {
     intermediate += original.substr(last_end);
-    for (qword p = last_end; p < original.length(); p++) {
-      orig_pos.push_back(p);
-    }
   }
 
   pcre2_match_data_free(match_data);
@@ -316,15 +306,10 @@ printf( "!JIT=%i!\n", errcode );
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
   // Simulate backward replacement to generate flags
-  // We need to actually modify a simulated string to match Perl behavior
+  // Since original.substr(0,sim_pos)==simulated.substr(0,sim_pos) is always true,
+  // we can use sim_pos directly as the position in original
   string simulated;
-  vector<qword> sim_to_int_pos;
   simulated = intermediate;
-
-  // Initially, simulated position maps 1:1 to intermediate position
-  for (i = 0; i < intermediate.length(); i++) {
-    sim_to_int_pos.push_back(i);
-  }
 
   offset = 0;
   map<qword, bool> seen_sim_pos;
@@ -338,12 +323,6 @@ printf( "!JIT=%i!\n", errcode );
     sim_pos = ovector[0];
     sim_end = ovector[1];
 
-//printf( "%6i: %i\n", int(sim_pos), int(original.substr(0,sim_pos)==simulated.substr(0,sim_pos)) );
-
-    // Map simulated position back to intermediate position
-    qword int_pos;
-    int_pos = sim_to_int_pos[sim_pos];
-
     if (seen_sim_pos.find(sim_pos) == seen_sim_pos.end()) {
       seen_sim_pos[sim_pos] = true;
 
@@ -352,14 +331,12 @@ printf( "!JIT=%i!\n", errcode );
       string repl;
       repl = backward[match_str];
 
-      qword orig_start;
-      orig_start = orig_pos[int_pos];
-
+      // Use sim_pos directly as position in original (they're always equal up to sim_pos)
       bool should;
       should = false;
-      if (orig_start + repl.length() <= original.length()) {
+      if (sim_pos + repl.length() <= original.length()) {
         string orig_substr;
-        orig_substr = original.substr(orig_start, repl.length());
+        orig_substr = original.substr(sim_pos, repl.length());
         should = (orig_substr == repl);
       }
 
@@ -370,24 +347,8 @@ printf( "!JIT=%i!\n", errcode );
         match_len = sim_end - sim_pos;
         repl_len = repl.length();
 
-        // Replace in simulated string (more efficient than concatenation)
+        // Replace in simulated string
         simulated.replace(sim_pos, match_len, repl);
-
-        // Update position mapping more efficiently
-        if (repl_len != match_len) {
-          if (repl_len > match_len) {
-            // Insert new positions
-            sim_to_int_pos.insert(sim_to_int_pos.begin() + sim_end, repl_len - match_len, int_pos);
-          } else {
-            // Remove positions
-            sim_to_int_pos.erase(sim_to_int_pos.begin() + sim_pos + repl_len, sim_to_int_pos.begin() + sim_end);
-          }
-        }
-
-        // Update existing positions in the replacement range
-        for (qword j = sim_pos; j < sim_pos + repl_len; j++) {
-          sim_to_int_pos[j] = int_pos;
-        }
 
         offset = sim_pos + repl_len;
       } else {
