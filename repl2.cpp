@@ -192,7 +192,7 @@ string build_alternation(const vector<string_view> &keys) {
 }
 
 void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
-  string lb, la, original, intermediate, flags;
+  string lb, la, original, intermediate;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> forward, backward;
   vector<string_view> forward_keys, backward_keys;
@@ -313,8 +313,14 @@ printf( "!JIT=%i!\n", rc );
   // Pass 1: Collect all match positions in intermediate
   // Pass 2: Process matches sequentially, tracking cumulative offset
 
-  // Reserve flags capacity - estimate based on intermediate length / average word length
-  flags.reserve(intermediate.length() / 4);
+  // Open flags file for writing
+  FILE *flg;
+  flg = fopen(flg_file, "wb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
+    exit(1);
+  }
+  qword flags_count = 0;
 
   // Pass 1: Collect all matches in intermediate
   vector<pair<PCRE2_SIZE, PCRE2_SIZE>> matches;
@@ -358,7 +364,8 @@ printf( "!JIT=%i!\n", rc );
       should = (orig_view == repl);
     }
 
-    flags.push_back(should ? '1' : '0');
+    fputc(should ? '1' : '0', flg);
+    flags_count++;
 
     if (should) {
       // Update cumulative delta: we're replacing match_len with repl.length()
@@ -370,6 +377,7 @@ printf( "!JIT=%i!\n", rc );
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
+  fclose(flg);
 
   // Write output file
   FILE *out;
@@ -381,22 +389,11 @@ printf( "!JIT=%i!\n", rc );
   fwrite(intermediate.c_str(), 1, intermediate.length(), out);
   fclose(out);
 
-  // Write flags file
-  FILE *flg;
-  flg = fopen(flg_file, "wb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
-    exit(1);
-  }
-  fwrite(flags.c_str(), 1, flags.length(), flg);
-  fclose(flg);
-
-  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags.length());
+  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags_count);
 }
 
 void mode_decompress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
   string lb, la, data;
-  vector<char> flags;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> backward;
   vector<string_view> backward_keys;
@@ -432,12 +429,12 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   data = read_file(in_file);
   in_len = data.length();
 
-  // Read flags into vector<char>
-  string flags_str;
-  flags_str = read_file(flg_file);
-  flags.reserve(flags_str.length());
-  for (i = 0; i < flags_str.length(); i++) {
-    flags.push_back(flags_str[i] == '1');
+  // Open flags file for reading
+  FILE *flg;
+  flg = fopen(flg_file, "rb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for reading\n", flg_file);
+    exit(1);
   }
 
   // Build backward regex pattern
@@ -490,8 +487,9 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
 
-      if (flag_idx < flags.size()) {
-        should_replace = flags[flag_idx];
+      int c = fgetc(flg);
+      if (c != EOF) {
+        should_replace = (c == '1');
         flag_idx++;
       }
     }
@@ -528,6 +526,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   }
 
   fclose(out);
+  fclose(flg);
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
