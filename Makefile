@@ -2,7 +2,22 @@ CXX = g++
 CXXFLAGS = -O2 -Wall
 LDFLAGS = -lpcre2-8
 
-all: repl repflags
+# Platform-specific settings for DLL loading
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+  REPL2_LDFLAGS = $(LDFLAGS) -ldl
+  DLL_FLAGS = -shared -fPIC
+endif
+ifeq ($(UNAME_S),Darwin)
+  REPL2_LDFLAGS = $(LDFLAGS)
+  DLL_FLAGS = -shared -fPIC
+endif
+ifdef WINDIR
+  REPL2_LDFLAGS = $(LDFLAGS)
+  DLL_FLAGS = -shared
+endif
+
+all: repl repflags repl2 default.dll
 
 repl: repl.cpp
 	$(CXX) $(CXXFLAGS) -o repl repl.cpp $(LDFLAGS)
@@ -10,7 +25,13 @@ repl: repl.cpp
 repflags: repflags.cpp
 	$(CXX) $(CXXFLAGS) -o repflags repflags.cpp $(LDFLAGS)
 
+repl2: repl2.cpp
+	$(CXX) $(CXXFLAGS) -o repl2 repl2.cpp $(REPL2_LDFLAGS)
+
+default.dll: default_dll.cpp
+	$(CXX) $(CXXFLAGS) $(DLL_FLAGS) -o default.dll default_dll.cpp
+
 clean:
-	rm -f repl repflags
+	rm -f repl repflags repl2 default.dll
 
 .PHONY: all clean

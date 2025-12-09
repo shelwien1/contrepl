@@ -14,6 +14,13 @@
 #include <vector>
 #include <algorithm>
 
+// DLL loading headers
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 //#define pcre2_jit_compile(x,y) 0
 
 #ifdef _WIN32
@@ -37,72 +44,66 @@ typedef uint8_t byte;
 static const int CTX_BEFORE = 32;  // symbols before match
 static const int CTX_AFTER = 32;   // symbols after match
 
-// Debug mode for API
-static const int API_DEBUG = 1;  // set to 0 to disable debug logging
-
-// API function for flags I/O
+// API function pointer type
 // bit=-1: constructor, ctx=filename, ofs=mode (0=encode/write, 1=decode/read)
 // bit=-2: destructor
 // bit=-3: read flag (decode mode), returns 0/1 or -1 on EOF
 // bit>=0: write flag (encode mode)
-static FILE* api_flg = nullptr;
-static FILE* api_dbg = nullptr;
-static int api_mode = 0;  // 0=encode, 1=decode
+typedef int (*API_func)(char bit, const char* ctx, int ofs, int len, int mlen);
 
-static void api_log(int flag, int ofs, int len, int mlen, const char* ctx) {
-  if (!api_dbg || !ctx) return;
-  fprintf(api_dbg, "%d %d %d %d ", flag, ofs, len, mlen);
-  for (int i = 0; i < len; i++) {
-    fprintf(api_dbg, "%02X", (unsigned char)ctx[i]);
+// Global API function pointer (loaded from DLL)
+static API_func API = nullptr;
+
+// DLL handle
+#ifdef _WIN32
+static HMODULE dll_handle = nullptr;
+#else
+static void* dll_handle = nullptr;
+#endif
+
+// Load DLL and get API function
+static bool load_dll(const char* dll_name) {
+#ifdef _WIN32
+  dll_handle = LoadLibraryA(dll_name);
+  if (!dll_handle) {
+    fprintf(stderr, "Cannot load DLL: %s (error %lu)\n", dll_name, GetLastError());
+    return false;
   }
-  fprintf(api_dbg, "\n");
+  API = (API_func)GetProcAddress(dll_handle, "API");
+  if (!API) {
+    fprintf(stderr, "Cannot find API function in DLL: %s (error %lu)\n", dll_name, GetLastError());
+    FreeLibrary(dll_handle);
+    dll_handle = nullptr;
+    return false;
+  }
+#else
+  dll_handle = dlopen(dll_name, RTLD_NOW);
+  if (!dll_handle) {
+    fprintf(stderr, "Cannot load DLL: %s (%s)\n", dll_name, dlerror());
+    return false;
+  }
+  API = (API_func)dlsym(dll_handle, "API");
+  if (!API) {
+    fprintf(stderr, "Cannot find API function in DLL: %s (%s)\n", dll_name, dlerror());
+    dlclose(dll_handle);
+    dll_handle = nullptr;
+    return false;
+  }
+#endif
+  return true;
 }
 
-int API(char bit, const char* ctx = 0, int ofs = 0, int len = 0, int mlen = 0) {
-  if (bit == -1) {
-    // Constructor: open flags file
-    api_mode = ofs;
-    if (api_mode == 0) {
-      // Encode mode - open for writing
-      api_flg = fopen(ctx, "wb");
-      if (API_DEBUG) api_dbg = fopen("dbg_c.log", "w");
-    } else {
-      // Decode mode - open for reading
-      api_flg = fopen(ctx, "rb");
-      if (API_DEBUG) api_dbg = fopen("dbg_d.log", "w");
-    }
-    if (!api_flg) {
-      fprintf(stderr, "Cannot open flags file %s\n", ctx);
-      return 1;  // error
-    }
-    return 0;  // success
-  } else if (bit == -2) {
-    // Destructor: close files
-    if (api_flg) {
-      fclose(api_flg);
-      api_flg = nullptr;
-    }
-    if (api_dbg) {
-      fclose(api_dbg);
-      api_dbg = nullptr;
-    }
-    return 0;
-  } else if (bit == -3) {
-    // Read flag (decode mode)
-    if (!api_flg) return -1;
-    int c = fgetc(api_flg);
-    if (c == EOF) return -1;
-    int flag = (c == '1') ? 1 : 0;
-    if (API_DEBUG) api_log(flag, ofs, len, mlen, ctx);
-    return flag;
-  } else {
-    // Write flag (encode mode)
-    if (!api_flg) return -1;
-    int flag = bit ? 1 : 0;
-    fputc(flag ? '1' : '0', api_flg);
-    if (API_DEBUG) api_log(flag, ofs, len, mlen, ctx);
-    return 0;
+// Unload DLL
+static void unload_dll() {
+  if (dll_handle) {
+#ifdef _WIN32
+    FreeLibrary(dll_handle);
+#else
+    dlclose(dll_handle);
+#endif
+    dll_handle = nullptr;
   }
+  API = nullptr;
 }
 
 struct ReplacementPair {
@@ -386,7 +387,7 @@ printf( "!JIT=%i!\n", rc );
   // Pass 2: Process matches sequentially, tracking cumulative offset
 
   // Open flags file for writing via API
-  if (API(-1, flg_file, 0) != 0) {
+  if (API(-1, flg_file, 0, 0, 0) != 0) {
     exit(1);
   }
   qword flags_count = 0;
@@ -454,7 +455,7 @@ printf( "!JIT=%i!\n", rc );
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
-  API(-2);  // Close flags file
+  API(-2, nullptr, 0, 0, 0);  // Close flags file
 
   // Write output file
   FILE *out;
@@ -507,7 +508,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   in_len = data.length();
 
   // Open flags file for reading via API
-  if (API(-1, flg_file, 1) != 0) {
+  if (API(-1, flg_file, 1, 0, 0) != 0) {
     exit(1);
   }
 
@@ -609,7 +610,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   }
 
   fclose(out);
-  API(-2);  // Close flags file
+  API(-2, nullptr, 0, 0, 0);  // Close flags file
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
@@ -620,27 +621,48 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6) {
+  if (argc < 6 || argc > 7) {
     fprintf(stderr,
-            "Usage: %s <mode> <config> <input> <output> <flags>\n"
+            "Usage: %s <mode> <config> <input> <output> <flags> [dll]\n"
             "Modes:\n"
             "  c - compress (forward replacement with flag generation)\n"
             "  d - decompress (reverse replacement using flags)\n"
+            "Arguments:\n"
+            "  dll - optional: DLL/SO module name (default: default.dll)\n"
             "Examples:\n"
             "  %s c book1.cfg book1 book1.out book1.flg\n"
-            "  %s d book1.cfg book1.out book1.rst book1.flg\n",
-            argv[0], argv[0], argv[0]);
+            "  %s d book1.cfg book1.out book1.rst book1.flg\n"
+            "  %s c book1.cfg book1 book1.out book1.flg custom.dll\n",
+            argv[0], argv[0], argv[0], argv[0]);
     return 1;
   }
 
+  // Determine DLL name: argv[6] if provided, otherwise "./default.dll"
+  // Note: On Linux, dlopen doesn't search current directory by default
+#ifdef _WIN32
+  const char* default_dll = "default.dll";
+#else
+  const char* default_dll = "./default.dll";
+#endif
+  const char* dll_name = (argc >= 7) ? argv[6] : default_dll;
+
+  // Load DLL
+  if (!load_dll(dll_name)) {
+    return 1;
+  }
+
+  int result = 0;
   if (strcmp(argv[1], "c") == 0) {
     mode_compress(argv[2], argv[3], argv[4], argv[5]);
   } else if (strcmp(argv[1], "d") == 0) {
     mode_decompress(argv[2], argv[3], argv[4], argv[5]);
   } else {
     fprintf(stderr, "Invalid mode '%s'. Use 'c' or 'd'.\n", argv[1]);
-    return 1;
+    result = 1;
   }
 
-  return 0;
+  // Unload DLL
+  unload_dll();
+
+  return result;
 }
