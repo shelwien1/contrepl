@@ -199,7 +199,7 @@ string build_alternation(const vector<string_view> &keys) {
 }
 
 void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
-  string lb, la, original, intermediate, flags;
+  string lb, la, original, intermediate;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> forward, backward;
   vector<string_view> forward_keys, backward_keys;
@@ -320,6 +320,15 @@ printf( "!JIT=%i!\n", errcode );
   string simulated;
   simulated = intermediate;
 
+  // Open flags file for writing
+  FILE *flg;
+  flg = fopen(flg_file, "wb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
+    exit(1);
+  }
+  qword flag_count = 0;
+
   offset = 0;
   vector<bool> seen_sim_pos(simulated.length(), false);
 
@@ -346,7 +355,9 @@ printf( "!JIT=%i!\n", errcode );
         should = (orig_view == repl);
       }
 
-      flags += should ? '1' : '0';
+      char flag_char = should ? '1' : '0';
+      fwrite(&flag_char, 1, 1, flg);
+      flag_count++;
 
       if (should) {
         qword match_len, repl_len;
@@ -367,6 +378,7 @@ printf( "!JIT=%i!\n", errcode );
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
+  fclose(flg);
 
   // Write output file
   FILE *out;
@@ -378,22 +390,11 @@ printf( "!JIT=%i!\n", errcode );
   fwrite(intermediate.c_str(), 1, intermediate.length(), out);
   fclose(out);
 
-  // Write flags file
-  FILE *flg;
-  flg = fopen(flg_file, "wb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
-    exit(1);
-  }
-  fwrite(flags.c_str(), 1, flags.length(), flg);
-  fclose(flg);
-
-  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags.length());
+  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flag_count);
 }
 
 void mode_decompress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
   string lb, la, data;
-  vector<bool> flags;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> backward;
   vector<string_view> backward_keys;
@@ -429,12 +430,12 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   data = read_file(in_file);
   in_len = data.length();
 
-  // Read flags into vector<bool>
-  string flags_str;
-  flags_str = read_file(flg_file);
-  flags.reserve(flags_str.length());
-  for (i = 0; i < flags_str.length(); i++) {
-    flags.push_back(flags_str[i] == '1');
+  // Open flags file for reading
+  FILE *flg;
+  flg = fopen(flg_file, "rb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for reading\n", flg_file);
+    exit(1);
   }
 
   // Build backward regex pattern
@@ -487,8 +488,9 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
 
-      if (flag_idx < flags.size()) {
-        should_replace = flags[flag_idx];
+      int flag_char = fgetc(flg);
+      if (flag_char != EOF) {
+        should_replace = (flag_char == '1');
         flag_idx++;
       }
     }
@@ -525,6 +527,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   }
 
   fclose(out);
+  fclose(flg);
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
