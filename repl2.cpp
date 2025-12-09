@@ -12,6 +12,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 //#define pcre2_jit_compile(x,y) 0
 
@@ -176,18 +177,10 @@ string build_alternation(const vector<string_view> &keys) {
     sorted.push_back(make_pair(keys[i].length(), keys[i]));
   }
 
-  // Sort by length descending
-  for (i = 0; i < sorted.size(); i++) {
-    size_t j;
-    for (j = i + 1; j < sorted.size(); j++) {
-      if (sorted[j].first > sorted[i].first) {
-        pair<size_t, string_view> temp;
-        temp = sorted[i];
-        sorted[i] = sorted[j];
-        sorted[j] = temp;
-      }
-    }
-  }
+  // Sort by length descending using std::sort (O(n log n) instead of O(n^2))
+  std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+    return a.first > b.first;
+  });
 
   for (i = 0; i < sorted.size(); i++) {
     if (i > 0)
@@ -199,7 +192,7 @@ string build_alternation(const vector<string_view> &keys) {
 }
 
 void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
-  string lb, la, original, intermediate;
+  string lb, la, original, intermediate, flags;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> forward, backward;
   vector<string_view> forward_keys, backward_keys;
@@ -213,6 +206,9 @@ void mode_compress(const char *cfg_file, const char *in_file, const char *out_fi
   size_t i;
 
   parse_config(cfg_file, lb, la, pairs);
+
+  pcre2_config(PCRE2_CONFIG_JIT, &rc);
+printf( "!JIT=%i!\n", rc );
 
   if (pairs.empty()) {
     fprintf(stderr, "No replacement pairs found in config\n");
@@ -248,7 +244,6 @@ void mode_compress(const char *cfg_file, const char *in_file, const char *out_fi
   int errcode=-1;
 
   pcre2_config(PCRE2_CONFIG_JIT, &errcode);
-printf( "!JIT=%i!\n", errcode );
 
   PCRE2_SIZE erroffset;
   fwd_re = pcre2_compile((PCRE2_SPTR)fwd_pattern.c_str(), PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
@@ -267,7 +262,7 @@ printf( "!JIT=%i!\n", errcode );
   last_end = 0;
 
   while (offset < original.length()) {
-    rc = pcre2_match(fwd_re, (PCRE2_SPTR)original.c_str(), original.length(), offset, 0, match_data, NULL);
+    rc = pcre2_jit_match(fwd_re, (PCRE2_SPTR)original.c_str(), original.length(), offset, 0, match_data, NULL);
 
     if (rc < 0)
       break;
@@ -279,13 +274,13 @@ printf( "!JIT=%i!\n", errcode );
 
     // Add unmatched portion
     if (start > last_end) {
-      intermediate += original.substr(last_end, start - last_end);
+      intermediate.append(original.data() + last_end, start - last_end);
     }
 
     // Add replacement
     string_view match_str(original.data() + start, end - start);
     string_view repl = forward[match_str];
-    intermediate += repl;
+    intermediate.append(repl.data(), repl.length());
 
     last_end = end;
     offset = end;
@@ -295,7 +290,7 @@ printf( "!JIT=%i!\n", errcode );
 
   // Add remaining portion
   if (last_end < original.length()) {
-    intermediate += original.substr(last_end);
+    intermediate.append(original.data() + last_end, original.length() - last_end);
   }
 
   pcre2_match_data_free(match_data);
@@ -314,71 +309,67 @@ printf( "!JIT=%i!\n", errcode );
 
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
-  // Simulate backward replacement to generate flags
-  // Since original.substr(0,sim_pos)==simulated.substr(0,sim_pos) is always true,
-  // we can use sim_pos directly as the position in original
-  string simulated;
-  simulated = intermediate;
+  // Two-pass approach to avoid O(n) string::replace operations
+  // Pass 1: Collect all match positions in intermediate
+  // Pass 2: Process matches sequentially, tracking cumulative offset
 
-  // Open flags file for writing
-  FILE *flg;
-  flg = fopen(flg_file, "wb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
-    exit(1);
-  }
-  qword flag_count = 0;
+  // Reserve flags capacity - estimate based on intermediate length / average word length
+  flags.reserve(intermediate.length() / 4);
 
+  // Pass 1: Collect all matches in intermediate
+  vector<pair<PCRE2_SIZE, PCRE2_SIZE>> matches;
+  matches.reserve(intermediate.length() / 4);
   offset = 0;
-  vector<bool> seen_sim_pos(simulated.length(), false);
 
-  while (offset < simulated.length()) {
-    rc = pcre2_match(bwd_re, (PCRE2_SPTR)simulated.c_str(), simulated.length(), offset, 0, match_data, NULL);
-    if( rc<0 ) break;
+  while (offset < intermediate.length()) {
+    rc = pcre2_jit_match(bwd_re, (PCRE2_SPTR)intermediate.c_str(), intermediate.length(), offset, 0, match_data, NULL);
+    if (rc < 0) break;
 
     ovector = pcre2_get_ovector_pointer(match_data);
-    PCRE2_SIZE sim_pos, sim_end;
-    sim_pos = ovector[0];
-    sim_end = ovector[1];
+    PCRE2_SIZE start = ovector[0];
+    PCRE2_SIZE end = ovector[1];
+    matches.push_back({start, end});
+    offset = start + 1;
+  }
 
-    if (!seen_sim_pos[sim_pos]) {
-      seen_sim_pos[sim_pos] = true;
+  // Pass 2: Process matches and compute flags
+  // Track cumulative offset: difference between position in simulated vs intermediate
+  int64_t cumulative_delta = 0;
+  PCRE2_SIZE next_valid_int_pos = 0;  // Skip matches before this position in intermediate
 
-      string_view match_str(simulated.data() + sim_pos, sim_end - sim_pos);
-      string_view repl = backward[match_str];
+  for (size_t match_idx = 0; match_idx < matches.size(); match_idx++) {
+    PCRE2_SIZE int_pos = matches[match_idx].first;
+    PCRE2_SIZE int_end = matches[match_idx].second;
 
-      // Use sim_pos directly as position in original (they're always equal up to sim_pos)
-      bool should;
-      should = false;
-      if (sim_pos + repl.length() <= original.length()) {
-        string_view orig_view(original.data() + sim_pos, repl.length());
-        should = (orig_view == repl);
-      }
+    // Skip matches that fall within a previously replaced region
+    if (int_pos < next_valid_int_pos) continue;
 
-      char flag_char = should ? '1' : '0';
-      fwrite(&flag_char, 1, 1, flg);
-      flag_count++;
+    // Position in simulated (and original) = position in intermediate + cumulative delta
+    PCRE2_SIZE sim_pos = int_pos + cumulative_delta;
+    PCRE2_SIZE match_len = int_end - int_pos;
 
-      if (should) {
-        qword match_len, repl_len;
-        match_len = sim_end - sim_pos;
-        repl_len = repl.length();
+    string_view match_str(intermediate.data() + int_pos, match_len);
+    string_view repl = backward[match_str];
 
-        // Replace in simulated string
-        simulated.replace(sim_pos, match_len, repl);
+    // Check if original at sim_pos matches the replacement
+    bool should = false;
+    if (sim_pos + repl.length() <= original.length()) {
+      string_view orig_view(original.data() + sim_pos, repl.length());
+      should = (orig_view == repl);
+    }
 
-        offset = sim_pos + repl_len;
-      } else {
-        offset = sim_pos + 1;
-      }
-    } else {
-      offset = sim_pos + 1;
+    flags.push_back(should ? '1' : '0');
+
+    if (should) {
+      // Update cumulative delta: we're replacing match_len with repl.length()
+      cumulative_delta += (int64_t)repl.length() - (int64_t)match_len;
+      // Skip all matches that start before int_pos + match_len
+      next_valid_int_pos = int_end;
     }
   }
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
-  fclose(flg);
 
   // Write output file
   FILE *out;
@@ -390,11 +381,22 @@ printf( "!JIT=%i!\n", errcode );
   fwrite(intermediate.c_str(), 1, intermediate.length(), out);
   fclose(out);
 
-  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flag_count);
+  // Write flags file
+  FILE *flg;
+  flg = fopen(flg_file, "wb");
+  if (!flg) {
+    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
+    exit(1);
+  }
+  fwrite(flags.c_str(), 1, flags.length(), flg);
+  fclose(flg);
+
+  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags.length());
 }
 
 void mode_decompress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
   string lb, la, data;
+  vector<char> flags;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> backward;
   vector<string_view> backward_keys;
@@ -430,12 +432,12 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   data = read_file(in_file);
   in_len = data.length();
 
-  // Open flags file for reading
-  FILE *flg;
-  flg = fopen(flg_file, "rb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for reading\n", flg_file);
-    exit(1);
+  // Read flags into vector<char>
+  string flags_str;
+  flags_str = read_file(flg_file);
+  flags.reserve(flags_str.length());
+  for (i = 0; i < flags_str.length(); i++) {
+    flags.push_back(flags_str[i] == '1');
   }
 
   // Build backward regex pattern
@@ -469,10 +471,10 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   last_end = 0;
   flag_idx = 0;
   bytes_written = 0;
-  vector<bool> seen_pos(data.length(), false);
+  vector<char> seen_pos(data.length(), 0);
 
   while (offset < data.length()) {
-    rc = pcre2_match(bwd_re, (PCRE2_SPTR)data.c_str(), data.length(), offset, 0, match_data, NULL);
+    rc = pcre2_jit_match(bwd_re, (PCRE2_SPTR)data.c_str(), data.length(), offset, 0, match_data, NULL);
 
     if (rc < 0)
       break;
@@ -488,9 +490,8 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
 
-      int flag_char = fgetc(flg);
-      if (flag_char != EOF) {
-        should_replace = (flag_char == '1');
+      if (flag_idx < flags.size()) {
+        should_replace = flags[flag_idx];
         flag_idx++;
       }
     }
@@ -527,7 +528,6 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   }
 
   fclose(out);
-  fclose(flg);
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
