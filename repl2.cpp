@@ -411,12 +411,12 @@ printf( "!JIT=%i!\n", rc );
     }
 
     // Calculate context for API call
-    int ctx_before = (int_pos >= CTX_BEFORE) ? CTX_BEFORE : (int)int_pos;
-    int ctx_after = ((int_pos + match_len + CTX_AFTER) <= intermediate.length())
-                    ? CTX_AFTER : (int)(intermediate.length() - int_pos - match_len);
+    size_t ctx_before = (int_pos >= (size_t)CTX_BEFORE) ? (size_t)CTX_BEFORE : int_pos;
+    size_t remaining_after = intermediate.length() - int_pos - match_len;
+    size_t ctx_after = (remaining_after >= (size_t)CTX_AFTER) ? (size_t)CTX_AFTER : remaining_after;
     const char* context = intermediate.c_str() + int_pos - ctx_before;
-    int ctx_ofs = ctx_before;
-    int ctx_len = ctx_before + (int)match_len + ctx_after;
+    int ctx_ofs = (int)ctx_before;
+    int ctx_len = (int)(ctx_before + match_len + ctx_after);
 
     API(should ? 1 : 0, context, ctx_ofs, ctx_len, (int)match_len);
     flags_count++;
@@ -540,12 +540,12 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
 
       // Calculate context for API call
       PCRE2_SIZE match_len = end - pos;
-      int ctx_before = (pos >= CTX_BEFORE) ? CTX_BEFORE : (int)pos;
-      int ctx_after = ((pos + match_len + CTX_AFTER) <= data.length())
-                      ? CTX_AFTER : (int)(data.length() - pos - match_len);
+      size_t ctx_before = (pos >= (size_t)CTX_BEFORE) ? (size_t)CTX_BEFORE : pos;
+      size_t remaining_after = data.length() - pos - match_len;
+      size_t ctx_after = (remaining_after >= (size_t)CTX_AFTER) ? (size_t)CTX_AFTER : remaining_after;
       const char* context = data.c_str() + pos - ctx_before;
-      int ctx_ofs = ctx_before;
-      int ctx_len = ctx_before + (int)match_len + ctx_after;
+      int ctx_ofs = (int)ctx_before;
+      int ctx_len = (int)(ctx_before + match_len + ctx_after);
 
       int c = API(-3, context, ctx_ofs, ctx_len, (int)match_len);
       if (c != -1) {
