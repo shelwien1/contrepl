@@ -33,6 +33,55 @@ typedef uint32_t uint;
 typedef uint16_t word;
 typedef uint8_t byte;
 
+// Context size constants for API
+static const int CTX_BEFORE = 32;  // symbols before match
+static const int CTX_AFTER = 32;   // symbols after match
+
+// API function for flags I/O
+// bit=-1: constructor, ctx=filename, ofs=mode (0=encode/write, 1=decode/read)
+// bit=-2: destructor
+// bit=-3: read flag (decode mode), returns 0/1 or -1 on EOF
+// bit>=0: write flag (encode mode)
+static FILE* api_flg = nullptr;
+static int api_mode = 0;  // 0=encode, 1=decode
+
+int API(char bit, const char* ctx = 0, int ofs = 0, int len = 0, int mlen = 0) {
+  if (bit == -1) {
+    // Constructor: open flags file
+    api_mode = ofs;
+    if (api_mode == 0) {
+      // Encode mode - open for writing
+      api_flg = fopen(ctx, "wb");
+    } else {
+      // Decode mode - open for reading
+      api_flg = fopen(ctx, "rb");
+    }
+    if (!api_flg) {
+      fprintf(stderr, "Cannot open flags file %s\n", ctx);
+      return 1;  // error
+    }
+    return 0;  // success
+  } else if (bit == -2) {
+    // Destructor: close file
+    if (api_flg) {
+      fclose(api_flg);
+      api_flg = nullptr;
+    }
+    return 0;
+  } else if (bit == -3) {
+    // Read flag (decode mode)
+    if (!api_flg) return -1;
+    int c = fgetc(api_flg);
+    if (c == EOF) return -1;
+    return (c == '1') ? 1 : 0;
+  } else {
+    // Write flag (encode mode)
+    if (!api_flg) return -1;
+    fputc(bit ? '1' : '0', api_flg);
+    return 0;
+  }
+}
+
 struct ReplacementPair {
   string from;
   string to;
@@ -313,11 +362,8 @@ printf( "!JIT=%i!\n", rc );
   // Pass 1: Collect all match positions in intermediate
   // Pass 2: Process matches sequentially, tracking cumulative offset
 
-  // Open flags file for writing
-  FILE *flg;
-  flg = fopen(flg_file, "wb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for writing\n", flg_file);
+  // Open flags file for writing via API
+  if (API(-1, flg_file, 0) != 0) {
     exit(1);
   }
   qword flags_count = 0;
@@ -364,7 +410,15 @@ printf( "!JIT=%i!\n", rc );
       should = (orig_view == repl);
     }
 
-    fputc(should ? '1' : '0', flg);
+    // Calculate context for API call
+    int ctx_before = (int_pos >= CTX_BEFORE) ? CTX_BEFORE : (int)int_pos;
+    int ctx_after = ((int_pos + match_len + CTX_AFTER) <= intermediate.length())
+                    ? CTX_AFTER : (int)(intermediate.length() - int_pos - match_len);
+    const char* context = intermediate.c_str() + int_pos - ctx_before;
+    int ctx_ofs = ctx_before;
+    int ctx_len = ctx_before + (int)match_len + ctx_after;
+
+    API(should ? 1 : 0, context, ctx_ofs, ctx_len, (int)match_len);
     flags_count++;
 
     if (should) {
@@ -377,7 +431,7 @@ printf( "!JIT=%i!\n", rc );
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
-  fclose(flg);
+  API(-2);  // Close flags file
 
   // Write output file
   FILE *out;
@@ -429,11 +483,8 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   data = read_file(in_file);
   in_len = data.length();
 
-  // Open flags file for reading
-  FILE *flg;
-  flg = fopen(flg_file, "rb");
-  if (!flg) {
-    fprintf(stderr, "Cannot open %s for reading\n", flg_file);
+  // Open flags file for reading via API
+  if (API(-1, flg_file, 1) != 0) {
     exit(1);
   }
 
@@ -487,9 +538,18 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
 
-      int c = fgetc(flg);
-      if (c != EOF) {
-        should_replace = (c == '1');
+      // Calculate context for API call
+      PCRE2_SIZE match_len = end - pos;
+      int ctx_before = (pos >= CTX_BEFORE) ? CTX_BEFORE : (int)pos;
+      int ctx_after = ((pos + match_len + CTX_AFTER) <= data.length())
+                      ? CTX_AFTER : (int)(data.length() - pos - match_len);
+      const char* context = data.c_str() + pos - ctx_before;
+      int ctx_ofs = ctx_before;
+      int ctx_len = ctx_before + (int)match_len + ctx_after;
+
+      int c = API(-3, context, ctx_ofs, ctx_len, (int)match_len);
+      if (c != -1) {
+        should_replace = (c == 1);
         flag_idx++;
       }
     }
@@ -526,7 +586,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   }
 
   fclose(out);
-  fclose(flg);
+  API(-2);  // Close flags file
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
