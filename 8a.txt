@@ -1,0 +1,5 @@
+[^a-zA-Z]
+
+west	east
+West	East
+WEST	EAST

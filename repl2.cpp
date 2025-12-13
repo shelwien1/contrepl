@@ -3,6 +3,7 @@
 #define _FILE_OFFSET_BITS 64
 #define PCRE2_CODE_UNIT_WIDTH 8
 
+#define byte byte1
 #include <pcre2.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,13 +14,7 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
-
-// DLL loading headers
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
+#undef byte
 
 //#define pcre2_jit_compile(x,y) 0
 
@@ -35,10 +30,10 @@
 
 using namespace std;
 
-typedef uint64_t qword;
-typedef uint32_t uint;
-typedef uint16_t word;
-typedef uint8_t byte;
+typedef unsigned long long qword;
+typedef unsigned int uint;
+typedef unsigned short word;
+typedef unsigned char byte;
 
 // Context size constants for API
 static const int CTX_BEFORE = 32;  // symbols before match
@@ -54,57 +49,9 @@ typedef int (*API_func)(char bit, const char* ctx, int ofs, int len, int mlen);
 // Global API function pointer (loaded from DLL)
 static API_func API = nullptr;
 
-// DLL handle
-#ifdef _WIN32
-static HMODULE dll_handle = nullptr;
-#else
-static void* dll_handle = nullptr;
-#endif
+static bool load_dll(const char* dll_name);
+static void unload_dll();
 
-// Load DLL and get API function
-static bool load_dll(const char* dll_name) {
-#ifdef _WIN32
-  dll_handle = LoadLibraryA(dll_name);
-  if (!dll_handle) {
-    fprintf(stderr, "Cannot load DLL: %s (error %lu)\n", dll_name, GetLastError());
-    return false;
-  }
-  API = (API_func)GetProcAddress(dll_handle, "API");
-  if (!API) {
-    fprintf(stderr, "Cannot find API function in DLL: %s (error %lu)\n", dll_name, GetLastError());
-    FreeLibrary(dll_handle);
-    dll_handle = nullptr;
-    return false;
-  }
-#else
-  dll_handle = dlopen(dll_name, RTLD_NOW);
-  if (!dll_handle) {
-    fprintf(stderr, "Cannot load DLL: %s (%s)\n", dll_name, dlerror());
-    return false;
-  }
-  API = (API_func)dlsym(dll_handle, "API");
-  if (!API) {
-    fprintf(stderr, "Cannot find API function in DLL: %s (%s)\n", dll_name, dlerror());
-    dlclose(dll_handle);
-    dll_handle = nullptr;
-    return false;
-  }
-#endif
-  return true;
-}
-
-// Unload DLL
-static void unload_dll() {
-  if (dll_handle) {
-#ifdef _WIN32
-    FreeLibrary(dll_handle);
-#else
-    dlclose(dll_handle);
-#endif
-    dll_handle = nullptr;
-  }
-  API = nullptr;
-}
 
 struct ReplacementPair {
   string from;
@@ -665,4 +612,80 @@ int main(int argc, char **argv) {
   unload_dll();
 
   return result;
+}
+
+
+// DLL loading headers
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// DLL handle
+#ifdef _WIN32
+static HMODULE dll_handle = nullptr;
+char* GetErrorText( void ) { 
+  wchar_t* lpMsgBuf;
+  DWORD dw = GetLastError(); 
+  FormatMessageW(
+    FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+    NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)&lpMsgBuf, 0, NULL 
+  );
+  static char out[32768];
+  int wl=wcslen(lpMsgBuf);
+  WideCharToMultiByte( CP_OEMCP, 0, lpMsgBuf,wl+1, out,sizeof(out), 0,0 );
+  LocalFree(lpMsgBuf);
+  wl = strlen(out);
+  for( --wl; wl>=0; wl-- ) if( (byte&)out[wl]<32 ) out[wl]=' ';
+  return out;
+}
+#else
+static void* dll_handle = nullptr;
+#endif
+
+// Load DLL and get API function
+static bool load_dll(const char* dll_name) {
+#ifdef _WIN32
+  dll_handle = LoadLibraryA(dll_name);
+  if (!dll_handle) {
+    char* etxt = GetErrorText();
+    fprintf(stderr, "Cannot load DLL: %s (error %lu: %s)\n", dll_name, GetLastError(), etxt);
+    return false;
+  }
+  API = (API_func)GetProcAddress(dll_handle, "API");
+  if (!API) {
+    fprintf(stderr, "Cannot find API function in DLL: %s (error %lu)\n", dll_name, GetLastError());
+    FreeLibrary(dll_handle);
+    dll_handle = nullptr;
+    return false;
+  }
+#else
+  dll_handle = dlopen(dll_name, RTLD_NOW);
+  if (!dll_handle) {
+    fprintf(stderr, "Cannot load DLL: %s (%s)\n", dll_name, dlerror());
+    return false;
+  }
+  API = (API_func)dlsym(dll_handle, "API");
+  if (!API) {
+    fprintf(stderr, "Cannot find API function in DLL: %s (%s)\n", dll_name, dlerror());
+    dlclose(dll_handle);
+    dll_handle = nullptr;
+    return false;
+  }
+#endif
+  return true;
+}
+
+// Unload DLL
+static void unload_dll() {
+  if (dll_handle) {
+#ifdef _WIN32
+    FreeLibrary(dll_handle);
+#else
+    dlclose(dll_handle);
+#endif
+    dll_handle = nullptr;
+  }
+  API = nullptr;
 }

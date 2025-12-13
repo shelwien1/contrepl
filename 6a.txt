@@ -1,0 +1,8 @@
+[^a-zA-Z]
+[^a-zA-Z]
+southeast	east
+Southeast	East
+SOUTHEAST	EAST
+southwest	west
+Southwest	West
+SOUTHWEST	WEST

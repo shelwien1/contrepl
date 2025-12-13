@@ -1,0 +1,8 @@
+[^a-zA-Z]
+[^a-zA-Z]
+northeast	east
+Northeast	East
+NORTHEAST	EAST
+northwest	west
+Northwest	West
+NORTHWEST	WEST
