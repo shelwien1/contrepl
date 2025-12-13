@@ -246,13 +246,83 @@ vector<ParsedConfig> parse_list_file(const char* list_path) {
   return configs;
 }
 
-// Create a single ParsedConfig from a file path
-ParsedConfig load_single_config(const char* cfg_file) {
-  ParsedConfig cfg;
-  cfg.name = cfg_file;
+// Parse multi-config file data - configs are separated by empty lines among pairs
+// Returns a vector of configs
+vector<ParsedConfig> parse_multi_config_data(const string& cfg_data_in, const string& base_name) {
+  vector<ParsedConfig> configs;
+  string cfg_data = cfg_data_in;
+  size_t pos, line_start, line_end;
+  int line_num;
+
+  // Normalize line endings
+  pos = 0;
+  while ((pos = cfg_data.find("\r\n", pos)) != string::npos) {
+    cfg_data.replace(pos, 2, "\n");
+  }
+
+  // Current config being built
+  ParsedConfig current;
+  current.name = base_name;
+  int config_index = 0;
+  bool in_pairs = false;  // Track if we've started reading pairs
+
+  // Parse lines
+  line_num = 0;
+  line_start = 0;
+
+  while (line_start < cfg_data.length()) {
+    line_end = cfg_data.find('\n', line_start);
+    if (line_end == string::npos) {
+      line_end = cfg_data.length();
+    }
+
+    string line = cfg_data.substr(line_start, line_end - line_start);
+
+    if (line_num == 0) {
+      current.lb = line;
+    } else if (line_num == 1) {
+      current.la = line;
+    } else {
+      // We're in the pairs section
+      if (line.empty()) {
+        // Empty line signals end of current config (only if we have pairs)
+        if (!current.pairs.empty()) {
+          configs.push_back(std::move(current));
+          config_index++;
+          current = ParsedConfig();
+          current.name = base_name + "[" + to_string(config_index) + "]";
+          line_num = -1;  // Reset for next config (will be incremented to 0)
+          in_pairs = false;
+        }
+      } else if (line.find('\t') != string::npos) {
+        size_t tab_pos;
+        tab_pos = line.find('\t');
+        ReplacementPair pair;
+        pair.from = line.substr(0, tab_pos);
+        pair.to = line.substr(tab_pos + 1);
+        decode_escapes(pair.from);
+        decode_escapes(pair.to);
+        current.pairs.push_back(pair);
+        in_pairs = true;
+      }
+    }
+
+    line_start = line_end + 1;
+    line_num++;
+  }
+
+  // Add the last config if it has pairs
+  if (!current.pairs.empty()) {
+    configs.push_back(std::move(current));
+  }
+
+  return configs;
+}
+
+// Create ParsedConfigs from a file path (handles multi-config files)
+vector<ParsedConfig> load_single_config(const char* cfg_file) {
   string cfg_data = read_file(cfg_file);
-  parse_config_data(cfg_data, cfg.lb, cfg.la, cfg.pairs);
-  return cfg;
+  return parse_multi_config_data(cfg_data, cfg_file);
 }
 
 string regex_quote(string_view s) {
@@ -483,7 +553,8 @@ void compress_single(const ParsedConfig& cfg, const string& original, string& in
 
 // Decompress with a single config - works on in-memory data
 // Reads flags from API, modifies data in-place
-void decompress_single(const ParsedConfig& cfg, string& data) {
+// Returns the number of flags consumed
+qword decompress_single(const ParsedConfig& cfg, string& data) {
   const string& lb = cfg.lb;
   const string& la = cfg.la;
   const vector<ReplacementPair>& pairs = cfg.pairs;
@@ -536,6 +607,7 @@ void decompress_single(const ParsedConfig& cfg, string& data) {
 
   offset = 0;
   qword last_end = 0;
+  qword flag_count = 0;
   vector<char> seen_pos(data.length(), 0);
 
   while (offset < data.length()) {
@@ -566,6 +638,7 @@ void decompress_single(const ParsedConfig& cfg, string& data) {
       int c = API(-3, context, ctx_ofs, ctx_len, (int)match_len);
       if (c != -1) {
         should_replace = (c == 1);
+        flag_count++;
       }
     }
 
@@ -597,6 +670,7 @@ void decompress_single(const ParsedConfig& cfg, string& data) {
   pcre2_code_free(bwd_re);
 
   data = std::move(output);
+  return flag_count;
 }
 
 // Compress mode - works on in-memory data, handles list mode
@@ -613,28 +687,46 @@ uint mode_compress(const vector<ParsedConfig>& configs, string& data, const char
 
   // Process configs in forward order
   for (size_t i = 0; i < configs.size(); i++) {
+    qword size_before = current.length();
     compress_single(configs[i], current, intermediate, all_flags[i]);
     current = std::move(intermediate);
-    fprintf(stderr, "Config %s: %llu flags\n", configs[i].name.c_str(), (qword)all_flags[i].size());
+    fprintf(stderr, "Config %s: %llu -> %llu bytes, %llu flags\n",
+            configs[i].name.c_str(), size_before, (qword)current.length(), (qword)all_flags[i].size());
   }
 
   // Initialize API for encoding (write mode)
   if( API(-1, flg_file, 0, 0, 0)!=0 ) return 1; // error
 
+  // Calculate total flags for progress reporting
+  qword total_flag_count = 0;
+  for (size_t i = 0; i < all_flags.size(); i++) {
+    total_flag_count += all_flags[i].size();
+  }
+
   // Write flags in reverse config order (for decompression which processes in reverse)
-  qword total_flags = 0;
+  qword flags_written = 0;
+  int last_percent = -1;
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
     for (size_t j = 0; j < all_flags[i].size(); j++) {
       const FlagRecord& rec = all_flags[i][j];
       API(rec.flag, rec.context.c_str(), rec.ctx_ofs, rec.ctx_len, rec.match_len);
-      total_flags++;
+      flags_written++;
+
+      // Progress reporting
+      int percent = (total_flag_count > 0) ? (int)(flags_written * 100 / total_flag_count) : 100;
+      if (percent != last_percent) {
+        fprintf(stderr, "\rWriting flags: %d%%", percent);
+        fflush(stderr);
+        last_percent = percent;
+      }
     }
   }
+  fprintf(stderr, "\r                    \r");  // Clear progress line
 
   API(-2, nullptr, 0, 0, 0);  // Close flags file
 
   data = std::move(current);
-  fprintf(stderr, "Total flags: %llu\n", (qword)total_flags);
+  fprintf(stderr, "Total flags: %llu\n", (qword)flags_written);
 
   return 0;
 }
@@ -642,12 +734,16 @@ uint mode_compress(const vector<ParsedConfig>& configs, string& data, const char
 // Decompress mode - works on in-memory data, handles list mode
 // API(-1) must be called before this function, API(-2) after
 void mode_decompress(const vector<ParsedConfig>& configs, string& data) {
+  qword total_flags = 0;
   // Process configs in reverse order
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
     qword len_before = data.length();
-    decompress_single(configs[i], data);
-    fprintf(stderr, "Config %s: %llu -> %llu bytes\n", configs[i].name.c_str(), (qword)len_before, (qword)data.length());
+    qword flag_count = decompress_single(configs[i], data);
+    fprintf(stderr, "Config %s: %llu -> %llu bytes, %llu flags\n",
+            configs[i].name.c_str(), (qword)len_before, (qword)data.length(), flag_count);
+    total_flags += flag_count;
   }
+  fprintf(stderr, "Total flags: %llu\n", total_flags);
 }
 
 int main(int argc, char **argv) {
@@ -702,8 +798,14 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "List mode: %llu configs\n", (qword)configs.size());
   } else {
-    // Single config mode - load the single config
-    configs.push_back(load_single_config(config_arg));
+    // Single config mode - load the config(s) from file
+    // Note: a single file may contain multiple configs separated by empty lines
+    configs = load_single_config(config_arg);
+    if (configs.empty()) {
+      fprintf(stderr, "No configs found in file %s\n", config_arg);
+      unload_dll();
+      return 1;
+    }
   }
 
   // Read input file once
