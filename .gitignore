@@ -1,6 +1,8 @@
 repl
 repl2
 repflags
+*.dll
+*.so
 
 # Generated test output files
 *.flg
