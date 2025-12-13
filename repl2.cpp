@@ -52,6 +52,14 @@ static API_func API = nullptr;
 static bool load_dll(const char* dll_name);
 static void unload_dll();
 
+// Structure to hold a single flag record for caching
+struct FlagRecord {
+  int flag;       // 0 or 1
+  string context; // context string
+  int ctx_ofs;    // offset within context
+  int ctx_len;    // context length
+  int match_len;  // match length
+};
 
 struct ReplacementPair {
   string from;
@@ -173,6 +181,48 @@ void parse_config(const char *cfg_file, string &lb, string &la, vector<Replaceme
   }
 }
 
+// Parse a list file (lines starting with @ in config argument)
+vector<string> parse_list_file(const char* list_path) {
+  vector<string> configs;
+  string list_data = read_file(list_path);
+
+  // Normalize line endings
+  size_t pos = 0;
+  while ((pos = list_data.find("\r\n", pos)) != string::npos) {
+    list_data.replace(pos, 2, "\n");
+  }
+
+  // Parse lines
+  size_t line_start = 0;
+  while (line_start < list_data.length()) {
+    size_t line_end = list_data.find('\n', line_start);
+    if (line_end == string::npos) {
+      line_end = list_data.length();
+    }
+
+    string line = list_data.substr(line_start, line_end - line_start);
+    // Trim whitespace
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+      line.pop_back();
+    }
+    size_t start = 0;
+    while (start < line.length() && (line[start] == ' ' || line[start] == '\t')) {
+      start++;
+    }
+    if (start > 0) {
+      line = line.substr(start);
+    }
+
+    if (!line.empty()) {
+      configs.push_back(line);
+    }
+
+    line_start = line_end + 1;
+  }
+
+  return configs;
+}
+
 string regex_quote(string_view s) {
   string result;
   result.reserve(s.length() * 2);
@@ -211,8 +261,11 @@ string build_alternation(const vector<string_view> &keys) {
   return result;
 }
 
-void mode_compress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
-  string lb, la, original, intermediate;
+// Compress with a single config - works on in-memory data
+// Returns flags in flags_out, modifies data in-place
+void compress_single(const char *cfg_file, const string& original, string& intermediate,
+                     vector<FlagRecord>& flags_out) {
+  string lb, la;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> forward, backward;
   vector<string_view> forward_keys, backward_keys;
@@ -228,10 +281,10 @@ void mode_compress(const char *cfg_file, const char *in_file, const char *out_fi
   parse_config(cfg_file, lb, la, pairs);
 
   pcre2_config(PCRE2_CONFIG_JIT, &rc);
-printf( "!JIT=%i!\n", rc );
+  //printf( "!JIT=%i!\n", rc );
 
   if (pairs.empty()) {
-    fprintf(stderr, "No replacement pairs found in config\n");
+    fprintf(stderr, "No replacement pairs found in config %s\n", cfg_file);
     exit(1);
   }
 
@@ -252,9 +305,8 @@ printf( "!JIT=%i!\n", rc );
     }
   }
 
-  original = read_file(in_file);
-
   // Reserve space for intermediate output
+  intermediate.clear();
   intermediate.reserve(original.length());
 
   // Build forward regex pattern
@@ -329,16 +381,6 @@ printf( "!JIT=%i!\n", rc );
 
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
-  // Two-pass approach to avoid O(n) string::replace operations
-  // Pass 1: Collect all match positions in intermediate
-  // Pass 2: Process matches sequentially, tracking cumulative offset
-
-  // Open flags file for writing via API
-  if (API(-1, flg_file, 0, 0, 0) != 0) {
-    exit(1);
-  }
-  qword flags_count = 0;
-
   // Pass 1: Collect all matches in intermediate
   vector<pair<PCRE2_SIZE, PCRE2_SIZE>> matches;
   matches.reserve(intermediate.length() / 4);
@@ -355,10 +397,9 @@ printf( "!JIT=%i!\n", rc );
     offset = start + 1;
   }
 
-  // Pass 2: Process matches and compute flags
-  // Track cumulative offset: difference between position in simulated vs intermediate
+  // Pass 2: Process matches and compute flags (store in flags_out)
   int64_t cumulative_delta = 0;
-  PCRE2_SIZE next_valid_int_pos = 0;  // Skip matches before this position in intermediate
+  PCRE2_SIZE next_valid_int_pos = 0;
 
   for (size_t match_idx = 0; match_idx < matches.size(); match_idx++) {
     PCRE2_SIZE int_pos = matches[match_idx].first;
@@ -381,7 +422,7 @@ printf( "!JIT=%i!\n", rc );
       should = (orig_view == repl);
     }
 
-    // Calculate context for API call
+    // Calculate context for flag record
     size_t ctx_before = (int_pos >= (size_t)CTX_BEFORE) ? (size_t)CTX_BEFORE : int_pos;
     size_t remaining_after = intermediate.length() - int_pos - match_len;
     size_t ctx_after = (remaining_after >= (size_t)CTX_AFTER) ? (size_t)CTX_AFTER : remaining_after;
@@ -389,8 +430,13 @@ printf( "!JIT=%i!\n", rc );
     int ctx_ofs = (int)ctx_before;
     int ctx_len = (int)(ctx_before + match_len + ctx_after);
 
-    API(should ? 1 : 0, context, ctx_ofs, ctx_len, (int)match_len);
-    flags_count++;
+    FlagRecord rec;
+    rec.flag = should ? 1 : 0;
+    rec.context.assign(context, ctx_len);
+    rec.ctx_ofs = ctx_ofs;
+    rec.ctx_len = ctx_len;
+    rec.match_len = (int)match_len;
+    flags_out.push_back(rec);
 
     if (should) {
       // Update cumulative delta: we're replacing match_len with repl.length()
@@ -402,23 +448,12 @@ printf( "!JIT=%i!\n", rc );
 
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
-  API(-2, nullptr, 0, 0, 0);  // Close flags file
-
-  // Write output file
-  FILE *out;
-  out = fopen(out_file, "wb");
-  if (!out) {
-    fprintf(stderr, "Cannot open %s for writing\n", out_file);
-    exit(1);
-  }
-  fwrite(intermediate.c_str(), 1, intermediate.length(), out);
-  fclose(out);
-
-  fprintf(stderr, "Original: %lu bytes, Output: %lu bytes, Flags: %lu\n", (qword)original.length(), (qword)intermediate.length(), (qword)flags_count);
 }
 
-void mode_decompress(const char *cfg_file, const char *in_file, const char *out_file, const char *flg_file) {
-  string lb, la, data;
+// Decompress with a single config - works on in-memory data
+// Reads flags from API, modifies data in-place
+void decompress_single(const char *cfg_file, string& data) {
+  string lb, la;
   vector<ReplacementPair> pairs;
   unordered_map<string_view, string_view> backward;
   vector<string_view> backward_keys;
@@ -429,12 +464,11 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
   PCRE2_SIZE offset;
   string bwd_pattern;
   size_t i;
-  qword in_len;
 
   parse_config(cfg_file, lb, la, pairs);
 
   if (pairs.empty()) {
-    fprintf(stderr, "No replacement pairs found in config\n");
+    fprintf(stderr, "No replacement pairs found in config %s\n", cfg_file);
     exit(1);
   }
 
@@ -449,14 +483,6 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
       backward[to_view] = from_view;
       backward_keys.push_back(to_view);
     }
-  }
-
-  data = read_file(in_file);
-  in_len = data.length();
-
-  // Open flags file for reading via API
-  if (API(-1, flg_file, 1, 0, 0) != 0) {
-    exit(1);
   }
 
   // Build backward regex pattern
@@ -474,22 +500,12 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
 
   match_data = pcre2_match_data_create_from_pattern(bwd_re, NULL);
 
-  // Open output file for writing
-  FILE *out;
-  out = fopen(out_file, "wb");
-  if (!out) {
-    fprintf(stderr, "Cannot open %s for writing\n", out_file);
-    exit(1);
-  }
+  // Apply replacements using flags, build output string
+  string output;
+  output.reserve(data.length() * 2);
 
-  // Apply replacements using flags, write directly to file
   offset = 0;
-  qword last_end;
-  qword flag_idx;
-  qword bytes_written;
-  last_end = 0;
-  flag_idx = 0;
-  bytes_written = 0;
+  qword last_end = 0;
   vector<char> seen_pos(data.length(), 0);
 
   while (offset < data.length()) {
@@ -503,8 +519,7 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
     pos = ovector[0];
     end = ovector[1];
 
-    bool should_replace;
-    should_replace = false;
+    bool should_replace = false;
 
     if (!seen_pos[pos]) {
       seen_pos[pos] = true;
@@ -521,24 +536,19 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
       int c = API(-3, context, ctx_ofs, ctx_len, (int)match_len);
       if (c != -1) {
         should_replace = (c == 1);
-        flag_idx++;
       }
     }
 
     if (should_replace) {
       // Write unmatched portion before this match
       if (pos > last_end) {
-        qword len;
-        len = pos - last_end;
-        fwrite(data.c_str() + last_end, 1, len, out);
-        bytes_written += len;
+        output.append(data.c_str() + last_end, pos - last_end);
       }
 
       // Write replacement
       string_view match_str(data.data() + pos, end - pos);
       string_view repl = backward[match_str];
-      fwrite(repl.data(), 1, repl.length(), out);
-      bytes_written += repl.length();
+      output.append(repl.data(), repl.length());
 
       last_end = end;
       offset = end;
@@ -550,21 +560,69 @@ void mode_decompress(const char *cfg_file, const char *in_file, const char *out_
 
   // Write remaining portion
   if (last_end < data.length()) {
-    qword len;
-    len = data.length() - last_end;
-    fwrite(data.c_str() + last_end, 1, len, out);
-    bytes_written += len;
+    output.append(data.c_str() + last_end, data.length() - last_end);
   }
 
-  fclose(out);
-  API(-2, nullptr, 0, 0, 0);  // Close flags file
   pcre2_match_data_free(match_data);
   pcre2_code_free(bwd_re);
 
-  fprintf(stderr,
-          "Input: %lu bytes, Restored: %lu bytes, "
-          "Flags used: %lu\n",
-          (qword)in_len, (qword)bytes_written, (qword)flag_idx);
+  data = std::move(output);
+}
+
+// Compress mode - works on in-memory data, handles list mode
+void mode_compress(const vector<string>& configs, string& data, const char* flg_file) {
+  // For list mode, we need to:
+  // 1. Apply transformations in forward order (configs[0], configs[1], ...)
+  // 2. Collect flags for each config
+  // 3. Write flags to API in reverse config order (for decompression)
+
+  vector<vector<FlagRecord>> all_flags(configs.size());
+  string current = data;
+  string intermediate;
+
+  // Process configs in forward order
+  for (size_t i = 0; i < configs.size(); i++) {
+    compress_single(configs[i].c_str(), current, intermediate, all_flags[i]);
+    current = std::move(intermediate);
+    fprintf(stderr, "Config %s: %llu flags\n", configs[i].c_str(), (qword)all_flags[i].size());
+  }
+
+  // Open flags file for writing via API
+  if (API(-1, flg_file, 0, 0, 0) != 0) {
+    exit(1);
+  }
+
+  // Write flags in reverse config order (for decompression which processes in reverse)
+  qword total_flags = 0;
+  for (int i = (int)configs.size() - 1; i >= 0; i--) {
+    for (size_t j = 0; j < all_flags[i].size(); j++) {
+      const FlagRecord& rec = all_flags[i][j];
+      API(rec.flag, rec.context.c_str(), rec.ctx_ofs, rec.ctx_len, rec.match_len);
+      total_flags++;
+    }
+  }
+
+  API(-2, nullptr, 0, 0, 0);  // Close flags file
+
+  data = std::move(current);
+  fprintf(stderr, "Total flags: %llu\n", (qword)total_flags);
+}
+
+// Decompress mode - works on in-memory data, handles list mode
+void mode_decompress(const vector<string>& configs, string& data, const char* flg_file) {
+  // Open flags file for reading via API
+  if (API(-1, flg_file, 1, 0, 0) != 0) {
+    exit(1);
+  }
+
+  // Process configs in reverse order
+  for (int i = (int)configs.size() - 1; i >= 0; i--) {
+    qword len_before = data.length();
+    decompress_single(configs[i].c_str(), data);
+    fprintf(stderr, "Config %s: %llu -> %llu bytes\n", configs[i].c_str(), (qword)len_before, (qword)data.length());
+  }
+
+  API(-2, nullptr, 0, 0, 0);  // Close flags file
 }
 
 int main(int argc, char **argv) {
@@ -575,12 +633,14 @@ int main(int argc, char **argv) {
             "  c - compress (forward replacement with flag generation)\n"
             "  d - decompress (reverse replacement using flags)\n"
             "Arguments:\n"
+            "  config - config file, or @listfile for a list of configs\n"
             "  dll - optional: DLL/SO module name (default: default.dll)\n"
             "Examples:\n"
             "  %s c book1.cfg book1 book1.out book1.flg\n"
             "  %s d book1.cfg book1.out book1.rst book1.flg\n"
-            "  %s c book1.cfg book1 book1.out book1.flg custom.dll\n",
-            argv[0], argv[0], argv[0], argv[0]);
+            "  %s c @list1 book1 book1.out book1.flg\n"
+            "  %s d @list1 book1.out book1.rst book1.flg\n",
+            argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 1;
   }
 
@@ -598,14 +658,54 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int result = 0;
-  if (strcmp(argv[1], "c") == 0) {
-    mode_compress(argv[2], argv[3], argv[4], argv[5]);
-  } else if (strcmp(argv[1], "d") == 0) {
-    mode_decompress(argv[2], argv[3], argv[4], argv[5]);
+  const char* mode = argv[1];
+  const char* config_arg = argv[2];
+  const char* in_file = argv[3];
+  const char* out_file = argv[4];
+  const char* flg_file = argv[5];
+
+  // Parse config argument - check for @ prefix for list mode
+  vector<string> configs;
+  if (config_arg[0] == '@') {
+    // List mode - parse list file
+    configs = parse_list_file(config_arg + 1);
+    if (configs.empty()) {
+      fprintf(stderr, "No config files found in list %s\n", config_arg + 1);
+      unload_dll();
+      return 1;
+    }
+    fprintf(stderr, "List mode: %llu configs\n", (qword)configs.size());
   } else {
-    fprintf(stderr, "Invalid mode '%s'. Use 'c' or 'd'.\n", argv[1]);
+    // Single config mode
+    configs.push_back(config_arg);
+  }
+
+  // Read input file once
+  string data = read_file(in_file);
+  qword original_size = data.length();
+  fprintf(stderr, "Input: %llu bytes\n", (qword)original_size);
+
+  int result = 0;
+  if (strcmp(mode, "c") == 0) {
+    mode_compress(configs, data, flg_file);
+  } else if (strcmp(mode, "d") == 0) {
+    mode_decompress(configs, data, flg_file);
+  } else {
+    fprintf(stderr, "Invalid mode '%s'. Use 'c' or 'd'.\n", mode);
     result = 1;
+  }
+
+  if (result == 0) {
+    // Write output file once
+    FILE *out = fopen(out_file, "wb");
+    if (!out) {
+      fprintf(stderr, "Cannot open %s for writing\n", out_file);
+      result = 1;
+    } else {
+      fwrite(data.c_str(), 1, data.length(), out);
+      fclose(out);
+      fprintf(stderr, "Output: %llu bytes\n", (qword)data.length());
+    }
   }
 
   // Unload DLL
@@ -625,12 +725,12 @@ int main(int argc, char **argv) {
 // DLL handle
 #ifdef _WIN32
 static HMODULE dll_handle = nullptr;
-char* GetErrorText( void ) { 
+char* GetErrorText( void ) {
   wchar_t* lpMsgBuf;
-  DWORD dw = GetLastError(); 
+  DWORD dw = GetLastError();
   FormatMessageW(
     FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-    NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)&lpMsgBuf, 0, NULL 
+    NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)&lpMsgBuf, 0, NULL
   );
   static char out[32768];
   int wl=wcslen(lpMsgBuf);
