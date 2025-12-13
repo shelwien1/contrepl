@@ -570,7 +570,8 @@ void decompress_single(const char *cfg_file, string& data) {
 }
 
 // Compress mode - works on in-memory data, handles list mode
-void mode_compress(const vector<string>& configs, string& data, const char* flg_file) {
+// API(-1) must be called before this function, API(-2) after
+void mode_compress(const vector<string>& configs, string& data) {
   // For list mode, we need to:
   // 1. Apply transformations in forward order (configs[0], configs[1], ...)
   // 2. Collect flags for each config
@@ -587,11 +588,6 @@ void mode_compress(const vector<string>& configs, string& data, const char* flg_
     fprintf(stderr, "Config %s: %llu flags\n", configs[i].c_str(), (qword)all_flags[i].size());
   }
 
-  // Open flags file for writing via API
-  if (API(-1, flg_file, 0, 0, 0) != 0) {
-    exit(1);
-  }
-
   // Write flags in reverse config order (for decompression which processes in reverse)
   qword total_flags = 0;
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
@@ -602,27 +598,19 @@ void mode_compress(const vector<string>& configs, string& data, const char* flg_
     }
   }
 
-  API(-2, nullptr, 0, 0, 0);  // Close flags file
-
   data = std::move(current);
   fprintf(stderr, "Total flags: %llu\n", (qword)total_flags);
 }
 
 // Decompress mode - works on in-memory data, handles list mode
-void mode_decompress(const vector<string>& configs, string& data, const char* flg_file) {
-  // Open flags file for reading via API
-  if (API(-1, flg_file, 1, 0, 0) != 0) {
-    exit(1);
-  }
-
+// API(-1) must be called before this function, API(-2) after
+void mode_decompress(const vector<string>& configs, string& data) {
   // Process configs in reverse order
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
     qword len_before = data.length();
     decompress_single(configs[i].c_str(), data);
     fprintf(stderr, "Config %s: %llu -> %llu bytes\n", configs[i].c_str(), (qword)len_before, (qword)data.length());
   }
-
-  API(-2, nullptr, 0, 0, 0);  // Close flags file
 }
 
 int main(int argc, char **argv) {
@@ -687,9 +675,21 @@ int main(int argc, char **argv) {
 
   int result = 0;
   if (strcmp(mode, "c") == 0) {
-    mode_compress(configs, data, flg_file);
+    // Initialize API for encoding (write mode)
+    if (API(-1, flg_file, 0, 0, 0) != 0) {
+      unload_dll();
+      return 1;
+    }
+    mode_compress(configs, data);
+    API(-2, nullptr, 0, 0, 0);  // Close flags file
   } else if (strcmp(mode, "d") == 0) {
-    mode_decompress(configs, data, flg_file);
+    // Initialize API for decoding (read mode)
+    if (API(-1, flg_file, 1, 0, 0) != 0) {
+      unload_dll();
+      return 1;
+    }
+    mode_decompress(configs, data);
+    API(-2, nullptr, 0, 0, 0);  // Close flags file
   } else {
     fprintf(stderr, "Invalid mode '%s'. Use 'c' or 'd'.\n", mode);
     result = 1;
