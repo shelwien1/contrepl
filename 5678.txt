@@ -1,0 +1,38 @@
+[^a-zA-Z]
+[^a-zA-Z]
+south	east
+South	East
+SOUTH	EAST
+north	west
+North	West
+NORTH	WEST
+southern	eastern
+Southern	Eastern
+SOUTHERN	EASTERN
+northern	western
+Northern	Western
+NORTHERN	WESTERN
+
+[^a-zA-Z]
+[^a-zA-Z]
+southeast	east
+Southeast	East
+SOUTHEAST	EAST
+southwest	west
+Southwest	West
+SOUTHWEST	WEST
+
+[^a-zA-Z]
+[^a-zA-Z]
+northeast	east
+Northeast	East
+NORTHEAST	EAST
+northwest	west
+Northwest	West
+NORTHWEST	WEST
+
+[^a-zA-Z]
+
+west	east
+West	East
+WEST	EAST

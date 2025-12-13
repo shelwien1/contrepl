@@ -601,7 +601,7 @@ void decompress_single(const ParsedConfig& cfg, string& data) {
 
 // Compress mode - works on in-memory data, handles list mode
 // API(-1) must be called before this function, API(-2) after
-void mode_compress(const vector<ParsedConfig>& configs, string& data) {
+uint mode_compress(const vector<ParsedConfig>& configs, string& data, const char* flg_file ) {
   // For list mode, we need to:
   // 1. Apply transformations in forward order (configs[0], configs[1], ...)
   // 2. Collect flags for each config
@@ -618,6 +618,9 @@ void mode_compress(const vector<ParsedConfig>& configs, string& data) {
     fprintf(stderr, "Config %s: %llu flags\n", configs[i].name.c_str(), (qword)all_flags[i].size());
   }
 
+  // Initialize API for encoding (write mode)
+  if( API(-1, flg_file, 0, 0, 0)!=0 ) return 1; // error
+
   // Write flags in reverse config order (for decompression which processes in reverse)
   qword total_flags = 0;
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
@@ -628,8 +631,12 @@ void mode_compress(const vector<ParsedConfig>& configs, string& data) {
     }
   }
 
+  API(-2, nullptr, 0, 0, 0);  // Close flags file
+
   data = std::move(current);
   fprintf(stderr, "Total flags: %llu\n", (qword)total_flags);
+
+  return 0;
 }
 
 // Decompress mode - works on in-memory data, handles list mode
@@ -706,13 +713,10 @@ int main(int argc, char **argv) {
 
   int result = 0;
   if (strcmp(mode, "c") == 0) {
-    // Initialize API for encoding (write mode)
-    if (API(-1, flg_file, 0, 0, 0) != 0) {
+    if( mode_compress(configs, data, flg_file)!=0 ) {
       unload_dll();
       return 1;
     }
-    mode_compress(configs, data);
-    API(-2, nullptr, 0, 0, 0);  // Close flags file
   } else if (strcmp(mode, "d") == 0) {
     // Initialize API for decoding (read mode)
     if (API(-1, flg_file, 1, 0, 0) != 0) {
