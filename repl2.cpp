@@ -66,6 +66,14 @@ struct ReplacementPair {
   string to;
 };
 
+// Structure to hold a parsed config
+struct ParsedConfig {
+  string name;  // config file name (for logging)
+  string lb;    // lookbehind pattern
+  string la;    // lookahead pattern
+  vector<ReplacementPair> pairs;
+};
+
 void decode_escapes(string &s) {
   string result;
   size_t i, len;
@@ -136,12 +144,11 @@ string read_file(const char *path) {
   return result;
 }
 
-void parse_config(const char *cfg_file, string &lb, string &la, vector<ReplacementPair> &pairs) {
-  string cfg_data;
+// Parse config from string data
+void parse_config_data(const string& cfg_data_in, string &lb, string &la, vector<ReplacementPair> &pairs) {
+  string cfg_data = cfg_data_in;
   size_t pos, line_start, line_end;
   int line_num;
-
-  cfg_data = read_file(cfg_file);
 
   // Normalize line endings
   pos = 0;
@@ -181,9 +188,15 @@ void parse_config(const char *cfg_file, string &lb, string &la, vector<Replaceme
   }
 }
 
-// Parse a list file (lines starting with @ in config argument)
-vector<string> parse_list_file(const char* list_path) {
-  vector<string> configs;
+// Parse config from file (wrapper that reads file then parses)
+void parse_config(const char *cfg_file, string &lb, string &la, vector<ReplacementPair> &pairs) {
+  string cfg_data = read_file(cfg_file);
+  parse_config_data(cfg_data, lb, la, pairs);
+}
+
+// Parse a list file and load all configs into memory
+vector<ParsedConfig> parse_list_file(const char* list_path) {
+  vector<ParsedConfig> configs;
   string list_data = read_file(list_path);
 
   // Normalize line endings
@@ -192,7 +205,8 @@ vector<string> parse_list_file(const char* list_path) {
     list_data.replace(pos, 2, "\n");
   }
 
-  // Parse lines
+  // Parse lines to get config file paths
+  vector<string> config_paths;
   size_t line_start = 0;
   while (line_start < list_data.length()) {
     size_t line_end = list_data.find('\n', line_start);
@@ -214,13 +228,31 @@ vector<string> parse_list_file(const char* list_path) {
     }
 
     if (!line.empty()) {
-      configs.push_back(line);
+      config_paths.push_back(line);
     }
 
     line_start = line_end + 1;
   }
 
+  // Load and parse each config file
+  for (const string& path : config_paths) {
+    ParsedConfig cfg;
+    cfg.name = path;
+    string cfg_data = read_file(path.c_str());
+    parse_config_data(cfg_data, cfg.lb, cfg.la, cfg.pairs);
+    configs.push_back(std::move(cfg));
+  }
+
   return configs;
+}
+
+// Create a single ParsedConfig from a file path
+ParsedConfig load_single_config(const char* cfg_file) {
+  ParsedConfig cfg;
+  cfg.name = cfg_file;
+  string cfg_data = read_file(cfg_file);
+  parse_config_data(cfg_data, cfg.lb, cfg.la, cfg.pairs);
+  return cfg;
 }
 
 string regex_quote(string_view s) {
@@ -263,10 +295,11 @@ string build_alternation(const vector<string_view> &keys) {
 
 // Compress with a single config - works on in-memory data
 // Returns flags in flags_out, modifies data in-place
-void compress_single(const char *cfg_file, const string& original, string& intermediate,
+void compress_single(const ParsedConfig& cfg, const string& original, string& intermediate,
                      vector<FlagRecord>& flags_out) {
-  string lb, la;
-  vector<ReplacementPair> pairs;
+  const string& lb = cfg.lb;
+  const string& la = cfg.la;
+  const vector<ReplacementPair>& pairs = cfg.pairs;
   unordered_map<string_view, string_view> forward, backward;
   vector<string_view> forward_keys, backward_keys;
   pcre2_code *fwd_re;
@@ -278,13 +311,11 @@ void compress_single(const char *cfg_file, const string& original, string& inter
   string fwd_pattern, bwd_pattern;
   size_t i;
 
-  parse_config(cfg_file, lb, la, pairs);
-
   pcre2_config(PCRE2_CONFIG_JIT, &rc);
   //printf( "!JIT=%i!\n", rc );
 
   if (pairs.empty()) {
-    fprintf(stderr, "No replacement pairs found in config %s\n", cfg_file);
+    fprintf(stderr, "No replacement pairs found in config %s\n", cfg.name.c_str());
     exit(1);
   }
 
@@ -452,9 +483,10 @@ void compress_single(const char *cfg_file, const string& original, string& inter
 
 // Decompress with a single config - works on in-memory data
 // Reads flags from API, modifies data in-place
-void decompress_single(const char *cfg_file, string& data) {
-  string lb, la;
-  vector<ReplacementPair> pairs;
+void decompress_single(const ParsedConfig& cfg, string& data) {
+  const string& lb = cfg.lb;
+  const string& la = cfg.la;
+  const vector<ReplacementPair>& pairs = cfg.pairs;
   unordered_map<string_view, string_view> backward;
   vector<string_view> backward_keys;
   pcre2_code *bwd_re;
@@ -465,10 +497,8 @@ void decompress_single(const char *cfg_file, string& data) {
   string bwd_pattern;
   size_t i;
 
-  parse_config(cfg_file, lb, la, pairs);
-
   if (pairs.empty()) {
-    fprintf(stderr, "No replacement pairs found in config %s\n", cfg_file);
+    fprintf(stderr, "No replacement pairs found in config %s\n", cfg.name.c_str());
     exit(1);
   }
 
@@ -571,7 +601,7 @@ void decompress_single(const char *cfg_file, string& data) {
 
 // Compress mode - works on in-memory data, handles list mode
 // API(-1) must be called before this function, API(-2) after
-void mode_compress(const vector<string>& configs, string& data) {
+void mode_compress(const vector<ParsedConfig>& configs, string& data) {
   // For list mode, we need to:
   // 1. Apply transformations in forward order (configs[0], configs[1], ...)
   // 2. Collect flags for each config
@@ -583,9 +613,9 @@ void mode_compress(const vector<string>& configs, string& data) {
 
   // Process configs in forward order
   for (size_t i = 0; i < configs.size(); i++) {
-    compress_single(configs[i].c_str(), current, intermediate, all_flags[i]);
+    compress_single(configs[i], current, intermediate, all_flags[i]);
     current = std::move(intermediate);
-    fprintf(stderr, "Config %s: %llu flags\n", configs[i].c_str(), (qword)all_flags[i].size());
+    fprintf(stderr, "Config %s: %llu flags\n", configs[i].name.c_str(), (qword)all_flags[i].size());
   }
 
   // Write flags in reverse config order (for decompression which processes in reverse)
@@ -604,12 +634,12 @@ void mode_compress(const vector<string>& configs, string& data) {
 
 // Decompress mode - works on in-memory data, handles list mode
 // API(-1) must be called before this function, API(-2) after
-void mode_decompress(const vector<string>& configs, string& data) {
+void mode_decompress(const vector<ParsedConfig>& configs, string& data) {
   // Process configs in reverse order
   for (int i = (int)configs.size() - 1; i >= 0; i--) {
     qword len_before = data.length();
-    decompress_single(configs[i].c_str(), data);
-    fprintf(stderr, "Config %s: %llu -> %llu bytes\n", configs[i].c_str(), (qword)len_before, (qword)data.length());
+    decompress_single(configs[i], data);
+    fprintf(stderr, "Config %s: %llu -> %llu bytes\n", configs[i].name.c_str(), (qword)len_before, (qword)data.length());
   }
 }
 
@@ -653,9 +683,10 @@ int main(int argc, char **argv) {
   const char* flg_file = argv[5];
 
   // Parse config argument - check for @ prefix for list mode
-  vector<string> configs;
+  // Load and parse all configs into memory upfront
+  vector<ParsedConfig> configs;
   if (config_arg[0] == '@') {
-    // List mode - parse list file
+    // List mode - parse list file and load all configs
     configs = parse_list_file(config_arg + 1);
     if (configs.empty()) {
       fprintf(stderr, "No config files found in list %s\n", config_arg + 1);
@@ -664,8 +695,8 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "List mode: %llu configs\n", (qword)configs.size());
   } else {
-    // Single config mode
-    configs.push_back(config_arg);
+    // Single config mode - load the single config
+    configs.push_back(load_single_config(config_arg));
   }
 
   // Read input file once
