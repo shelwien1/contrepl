@@ -1,4 +1,0 @@
-[^a-zA-Z']
-[^a-zA-Z']
-shouldn't	should not
-shouldn't've	should not have
