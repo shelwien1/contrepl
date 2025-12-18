@@ -1,0 +1,35 @@
+[^a-zA-Z]
+[^a-zA-Z]
+large	big
+Large	Big
+LARGE	BIG
+small	little
+Small	Little
+SMALL	LITTLE
+tiny	small
+Tiny	Small
+TINY	SMALL
+huge	big
+Huge	Big
+HUGE	BIG
+enormous	big
+Enormous	Big
+ENORMOUS	BIG
+vast	big
+Vast	Big
+VAST	BIG
+immense	big
+Immense	Big
+IMMENSE	BIG
+gigantic	big
+Gigantic	Big
+GIGANTIC	BIG
+massive	big
+Massive	Big
+MASSIVE	BIG
+miniature	small
+Miniature	Small
+MINIATURE	SMALL
+minute	small
+Minute	Small
+MINUTE	SMALL

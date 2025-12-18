@@ -4,18 +4,42 @@
 
 This document describes the **controlled regular expression replacement** compression method implemented in `repl2.cpp`, based on the preprocessing technique discussed in the [encode.su forum thread](https://encode.su/threads/3072-controlled-regexp-tools-for-HP).
 
+## Target Data
+
+This method is designed for **large text corpora**, particularly:
+- **enwik8/enwik9**: The Wikipedia text benchmarks (100MB/1GB of cleaned English Wikipedia)
+- **enwik_text2** and similar filtered text extracts
+- Literary works (e.g., the Calgary corpus `book1`)
+- Any natural language text with rich vocabulary
+
 ## Core Concept
 
 The method is a **multi-pass text preprocessing scheme** that improves compression by reducing lexical diversity (the number of distinct words/tokens) in text data. It works by:
 
-1. **Forward Transformation**: Applying regex-based pattern replacements to normalize text (e.g., expanding contractions, normalizing spellings)
+1. **Forward Transformation**: Applying regex-based pattern replacements to normalize text
 2. **Flag Generation**: Recording binary flags at each potential restoration point
 3. **Backward Restoration**: Using flags to selectively restore original content during decompression
 
-The key insight is that the flags themselves can be efficiently compressed because:
-- They are binary (0/1)
-- They occur at predictable positions (where patterns match)
-- The surrounding context helps predict their values
+### Key Insight: Bidirectional Context for Flag Compression
+
+Traditional context modeling (CM) in compression only has access to **left context** (bytes already processed). However, the repl2 API provides the flag encoder with **both left and right context** (32 bytes in each direction around each match). This is a significant advantage because:
+
+- **Right context is normally inaccessible** to streaming compressors
+- The flag encoder can exploit **bidirectional patterns** for better prediction
+- Context like "the ___ dog" (where ___ is the match position) can use both "the" (left) and "dog" (right) to predict the flag
+
+This enables flag compression that significantly exceeds what would be possible with standard CM approaches.
+
+### Replacement Scope: Beyond Grammar
+
+Replacements are **not limited to grammatical variations**. Any word can potentially be replaced by:
+
+1. **Synonyms**: big → large, small → little, fast → quick
+2. **Antonyms**: good → bad, hot → cold, up → down (they share similar syntactic contexts!)
+3. **Frequency normalization**: Map less frequent words to more frequent words that appear in similar contexts
+4. **Any contextually compatible word**: If two words can appear in the same contexts, one can be mapped to the other
+
+The goal is to **minimize the vocabulary** of the transformed text. The flags, compressed with bidirectional context, restore the original words where needed.
 
 ## How It Works
 
@@ -72,12 +96,19 @@ Compressed|                |    |          |
            +----------------+     +----------+
 ```
 
-### Context-Based Flag Modeling
+### Context-Based Flag Modeling (Bidirectional CM)
 
-Flags are written with 32 bytes of context before and after each match position. This context enables the flag encoder (DLL module) to:
-- Use order-N models for prediction
-- Exploit patterns in where restorations occur
-- Achieve better compression than raw flag storage
+Flags are written with **32 bytes of context before AND after** each match position. This bidirectional context enables the flag encoder (DLL module) to:
+
+- Use **order-N models with right context** - normally impossible in streaming compression
+- Exploit patterns on both sides: "the ___ is" tells us more than just "the ___"
+- Use **SSE (Secondary Symbol Estimation)** with features from both directions
+- Achieve significantly better compression than left-context-only approaches
+
+**Why this matters**: Consider predicting whether "large" should be restored to "big":
+- Left context only: "a ___ house" - limited information
+- Bidirectional: "a ___ house with" - more context for prediction
+- The right context often contains grammatical or semantic cues that strongly predict the flag
 
 ## Implementation Details (repl2.cpp)
 
@@ -593,6 +624,364 @@ echo "config_unicode_punct.txt" >> configs.lst
 ./repl2 d @configs.lst output.txt restored.txt flags.bin
 ```
 
+---
+
+# Additional Configurations: Semantic Replacements
+
+The following 5 configurations exploit the fact that **semantically related words share syntactic contexts**. This includes synonyms, antonyms, and frequency-based substitutions. The bidirectional context available to the flag encoder makes these replacements particularly effective.
+
+## Config 6: Common Synonym Pairs (Size/Magnitude)
+
+**Goal**: Map less frequent size-related words to more frequent equivalents.
+
+**Rationale**: Words like "big/large", "small/little" appear in identical syntactic contexts. Mapping to the more frequent variant reduces vocabulary; the flag (with bidirectional context) can predict which original word was used based on surrounding text style.
+
+```
+[^a-zA-Z]
+[^a-zA-Z]
+large	big
+Large	Big
+LARGE	BIG
+small	little
+Small	Little
+SMALL	LITTLE
+tiny	small
+Tiny	Small
+TINY	SMALL
+huge	big
+Huge	Big
+HUGE	BIG
+enormous	big
+Enormous	Big
+ENORMOUS	BIG
+vast	big
+Vast	Big
+VAST	BIG
+immense	big
+Immense	Big
+IMMENSE	BIG
+gigantic	big
+Gigantic	Big
+GIGANTIC	BIG
+massive	big
+Massive	Big
+MASSIVE	BIG
+miniature	small
+Miniature	Small
+MINIATURE	SMALL
+minute	small
+Minute	Small
+MINUTE	SMALL
+```
+
+**File**: `config_synonyms_size.txt`
+
+**Expected Impact**: Moderate - size adjectives are common. The bidirectional context helps distinguish formal ("enormous") from informal ("big") writing styles.
+
+---
+
+## Config 7: Antonym Pairs (Opposites Share Contexts)
+
+**Goal**: Map antonym pairs to a single canonical form.
+
+**Rationale**: Antonyms like "good/bad", "hot/cold" share nearly identical syntactic environments ("the ___ weather", "a ___ idea"). The flag encodes which polarity was intended. This is counterintuitive but effective because the **syntactic context is the same**; only semantics differ.
+
+```
+[^a-zA-Z]
+[^a-zA-Z]
+bad	good
+Bad	Good
+BAD	GOOD
+cold	hot
+Cold	Hot
+COLD	HOT
+slow	fast
+Slow	Fast
+SLOW	FAST
+weak	strong
+Weak	Strong
+WEAK	STRONG
+dark	light
+Dark	Light
+DARK	LIGHT
+old	new
+Old	New
+OLD	NEW
+wrong	right
+Wrong	Right
+WRONG	RIGHT
+poor	rich
+Poor	Rich
+POOR	RICH
+short	long
+Short	Long
+SHORT	LONG
+hard	soft
+Hard	Soft
+HARD	SOFT
+empty	full
+Empty	Full
+EMPTY	FULL
+dead	alive
+Dead	Alive
+DEAD	ALIVE
+cheap	expensive
+Cheap	Expensive
+CHEAP	EXPENSIVE
+dry	wet
+Dry	Wet
+DRY	WET
+```
+
+**File**: `config_antonyms.txt`
+
+**Expected Impact**: Variable - depends on the semantic coherence of the text. Works best when antonyms appear in similar frequencies. The flag essentially encodes the "polarity" of the adjective.
+
+---
+
+## Config 8: Motion/Action Verb Synonyms
+
+**Goal**: Normalize motion and action verbs to common base forms.
+
+**Rationale**: Verbs like "walk/stroll/march" or "say/state/declare" share syntactic contexts. Mapping to the most frequent variant reduces vocabulary significantly in narrative text.
+
+```
+[^a-zA-Z]
+[^a-zA-Z]
+stated	said
+Stated	Said
+STATED	SAID
+declared	said
+Declared	Said
+DECLARED	SAID
+exclaimed	said
+Exclaimed	Said
+EXCLAIMED	SAID
+replied	said
+Replied	Said
+REPLIED	SAID
+answered	said
+Answered	Said
+ANSWERED	SAID
+remarked	said
+Remarked	Said
+REMARKED	SAID
+whispered	said
+Whispered	Said
+WHISPERED	SAID
+shouted	said
+Shouted	Said
+SHOUTED	SAID
+muttered	said
+Muttered	Said
+MUTTERED	SAID
+walked	went
+Walked	Went
+WALKED	WENT
+ran	went
+Ran	Went
+RAN	WENT
+rushed	went
+Rushed	Went
+RUSHED	WENT
+hurried	went
+Hurried	Went
+HURRIED	WENT
+strolled	went
+Strolled	Went
+STROLLED	WENT
+marched	went
+Marched	Went
+MARCHED	WENT
+dashed	went
+Dashed	Went
+DASHED	WENT
+sprinted	went
+Sprinted	Went
+SPRINTED	WENT
+looked	saw
+Looked	Saw
+LOOKED	SAW
+gazed	saw
+Gazed	Saw
+GAZED	SAW
+stared	saw
+Stared	Saw
+STARED	SAW
+glanced	saw
+Glanced	Saw
+GLANCED	SAW
+watched	saw
+Watched	Saw
+WATCHED	SAW
+observed	saw
+Observed	Saw
+OBSERVED	SAW
+```
+
+**File**: `config_verb_synonyms.txt`
+
+**Expected Impact**: High for narrative/literary text. Speech verbs ("said" variants) are especially common in fiction. The right context (quotation marks, dialogue patterns) helps predict the original verb.
+
+---
+
+## Config 9: Common Word Frequency Normalization
+
+**Goal**: Replace less frequent common words with their more frequent near-synonyms.
+
+**Rationale**: Many common words have frequency disparities despite similar usage. Mapping to the more frequent variant improves compression of the main text; flags restore the less frequent originals.
+
+```
+[^a-zA-Z]
+[^a-zA-Z]
+although	though
+Although	Though
+ALTHOUGH	THOUGH
+whilst	while
+Whilst	While
+WHILST	WHILE
+amongst	among
+Amongst	Among
+AMONGST	AMONG
+towards	toward
+Towards	Toward
+TOWARDS	TOWARD
+upon	on
+Upon	On
+UPON	ON
+also	too
+Also	Too
+ALSO	TOO
+however	but
+However	But
+HOWEVER	BUT
+therefore	so
+Therefore	So
+THEREFORE	SO
+perhaps	maybe
+Perhaps	Maybe
+PERHAPS	MAYBE
+certainly	sure
+Certainly	Sure
+CERTAINLY	SURE
+nearly	almost
+Nearly	Almost
+NEARLY	ALMOST
+quite	very
+Quite	Very
+QUITE	VERY
+rather	quite
+Rather	Quite
+RATHER	QUITE
+often	much
+Often	Much
+OFTEN	MUCH
+always	ever
+Always	Ever
+ALWAYS	EVER
+```
+
+**File**: `config_frequency_normalize.txt`
+
+**Expected Impact**: Moderate - these words are common but the mappings are less semantically tight. Best for mixed-register text (Wikipedia, web content).
+
+---
+
+## Config 10: Quality/Descriptive Adjective Synonyms
+
+**Goal**: Normalize descriptive adjectives to common base forms.
+
+**Rationale**: Adjectives like "beautiful/pretty/lovely" or "important/significant/crucial" share contexts. Normalizing reduces vocabulary in descriptive text.
+
+```
+[^a-zA-Z]
+[^a-zA-Z]
+beautiful	nice
+Beautiful	Nice
+BEAUTIFUL	NICE
+pretty	nice
+Pretty	Nice
+PRETTY	NICE
+lovely	nice
+Lovely	Nice
+LOVELY	NICE
+wonderful	great
+Wonderful	Great
+WONDERFUL	GREAT
+excellent	great
+Excellent	Great
+EXCELLENT	GREAT
+fantastic	great
+Fantastic	Great
+FANTASTIC	GREAT
+amazing	great
+Amazing	Great
+AMAZING	GREAT
+terrible	bad
+Terrible	Bad
+TERRIBLE	BAD
+awful	bad
+Awful	Bad
+AWFUL	BAD
+horrible	bad
+Horrible	Bad
+HORRIBLE	BAD
+dreadful	bad
+Dreadful	Bad
+DREADFUL	BAD
+important	key
+Important	Key
+IMPORTANT	KEY
+significant	key
+Significant	Key
+SIGNIFICANT	KEY
+crucial	key
+Crucial	Key
+CRUCIAL	KEY
+essential	key
+Essential	Key
+ESSENTIAL	KEY
+vital	key
+Vital	Key
+VITAL	KEY
+major	key
+Major	Key
+MAJOR	KEY
+difficult	hard
+Difficult	Hard
+DIFFICULT	HARD
+challenging	hard
+Challenging	Hard
+CHALLENGING	HARD
+simple	easy
+Simple	Easy
+SIMPLE	EASY
+straightforward	easy
+Straightforward	Easy
+STRAIGHTFORWARD	EASY
+```
+
+**File**: `config_adjective_synonyms.txt`
+
+**Expected Impact**: High for descriptive/evaluative text (reviews, articles). The bidirectional context captures the register and formality level to predict the original word.
+
+---
+
+## Extended Summary Table
+
+| Config | Target | Vocabulary Reduction | Flag Predictability |
+|--------|--------|---------------------|---------------------|
+| Articles | a/an | Low | Very High |
+| British/American | Spelling variants | Medium | Document-level |
+| Plurals | Noun forms | High | Medium-High |
+| Past Tense | Verb forms | High | Medium |
+| Unicode Punct | Character variants | Medium | Document-level |
+| **Synonyms (Size)** | Size adjectives | Medium | Medium (style-based) |
+| **Antonyms** | Opposite pairs | Medium | Medium (semantic) |
+| **Verb Synonyms** | Motion/speech verbs | High | High (dialogue context) |
+| **Frequency Norm** | Common words | Medium | Medium |
+| **Adjective Synonyms** | Quality adjectives | High | Medium-High (register) |
+
 ## Evaluation Considerations
 
 When testing these configs:
@@ -601,3 +990,5 @@ When testing these configs:
 2. **Test with different compressors**: Some compressors benefit more from reduced vocabulary
 3. **Consider text genre**: Scientific text benefits from spelling normalization; fiction benefits from tense normalization
 4. **Watch for false positives**: Words that match patterns but shouldn't transform (e.g., "used" as adjective vs. past tense)
+5. **Semantic configs require good flag compression**: Antonym/synonym replacements only help if the bidirectional CM can predict flags well
+6. **Order matters**: Apply grammatical configs before semantic configs; the transformed text provides better context for semantic flag prediction
