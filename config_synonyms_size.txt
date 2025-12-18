@@ -3,24 +3,36 @@
 large	big
 Large	Big
 LARGE	BIG
+small	little
+Small	Little
+SMALL	LITTLE
 
 [^a-zA-Z]
 [^a-zA-Z]
 huge	big
 Huge	Big
 HUGE	BIG
+tiny	little
+Tiny	Little
+TINY	LITTLE
 
 [^a-zA-Z]
 [^a-zA-Z]
 enormous	big
 Enormous	Big
 ENORMOUS	BIG
+miniature	little
+Miniature	Little
+MINIATURE	LITTLE
 
 [^a-zA-Z]
 [^a-zA-Z]
 vast	big
 Vast	Big
 VAST	BIG
+minute	little
+Minute	Little
+MINUTE	LITTLE
 
 [^a-zA-Z]
 [^a-zA-Z]
@@ -39,27 +51,3 @@ GIGANTIC	BIG
 massive	big
 Massive	Big
 MASSIVE	BIG
-
-[^a-zA-Z]
-[^a-zA-Z]
-small	little
-Small	Little
-SMALL	LITTLE
-
-[^a-zA-Z]
-[^a-zA-Z]
-tiny	little
-Tiny	Little
-TINY	LITTLE
-
-[^a-zA-Z]
-[^a-zA-Z]
-miniature	little
-Miniature	Little
-MINIATURE	LITTLE
-
-[^a-zA-Z]
-[^a-zA-Z]
-minute	little
-Minute	Little
-MINUTE	LITTLE

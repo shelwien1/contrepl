@@ -142,30 +142,42 @@ declared	said    # PROBLEM: "said" already maps back to "stated"
 exclaimed	said   # PROBLEM: cannot restore to "exclaimed"
 ```
 
-**Solution**: Use multi-config format - separate configs for each unique from→to mapping:
+**Solution**: Use multi-config format. However, **replacements with different targets CAN be combined** in the same config to reduce file passes:
+
 ```
 [^a-zA-Z]
 [^a-zA-Z]
 stated	said
 Stated	Said
+walked	went
+Walked	Went
+looked	saw
+Looked	Saw
 
 [^a-zA-Z]
 [^a-zA-Z]
 declared	said
 Declared	Said
+ran	went
+Ran	Went
+gazed	saw
+Gazed	Saw
 
 [^a-zA-Z]
 [^a-zA-Z]
 exclaimed	said
 Exclaimed	Said
+rushed	went
+Rushed	Went
+stared	saw
+Stared	Saw
 ```
 
-Each config tracks its own flags, so:
-1. Forward pass: All three words become "said"
-2. Backward pass (reverse order): Each config's flags restore its specific word
-   - Config 3 flags: restore "said" → "exclaimed" where needed
-   - Config 2 flags: restore "said" → "declared" where needed
-   - Config 1 flags: restore "said" → "stated" where needed
+**Key principle**:
+- **Same target** (e.g., stated→said, declared→said) → must be in **separate configs**
+- **Different targets** (e.g., stated→said, walked→went) → can be in **same config**
+
+This reduces the number of configs from 24 (one per word) to 9 (grouping by target collision), significantly reducing file passes while maintaining lossless operation.
 
 ### Pattern Matching
 
@@ -674,6 +686,8 @@ The following 5 configurations exploit the fact that **semantically related word
 
 **Rationale**: Words like "big/large", "small/little" appear in identical syntactic contexts. Mapping to the more frequent variant reduces vocabulary; the flag (with bidirectional context) can predict which original word was used based on surrounding text style.
 
+**Note**: Uses multi-config format - words mapping to "big" and "little" are combined per config since they have different targets. Words mapping to the same target are in separate configs.
+
 ```
 [^a-zA-Z]
 [^a-zA-Z]
@@ -683,33 +697,51 @@ LARGE	BIG
 small	little
 Small	Little
 SMALL	LITTLE
-tiny	small
-Tiny	Small
-TINY	SMALL
+
+[^a-zA-Z]
+[^a-zA-Z]
 huge	big
 Huge	Big
 HUGE	BIG
+tiny	little
+Tiny	Little
+TINY	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
 enormous	big
 Enormous	Big
 ENORMOUS	BIG
+miniature	little
+Miniature	Little
+MINIATURE	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
 vast	big
 Vast	Big
 VAST	BIG
+minute	little
+Minute	Little
+MINUTE	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
 immense	big
 Immense	Big
 IMMENSE	BIG
+
+[^a-zA-Z]
+[^a-zA-Z]
 gigantic	big
 Gigantic	Big
 GIGANTIC	BIG
+
+[^a-zA-Z]
+[^a-zA-Z]
 massive	big
 Massive	Big
 MASSIVE	BIG
-miniature	small
-Miniature	Small
-MINIATURE	SMALL
-minute	small
-Minute	Small
-MINUTE	SMALL
 ```
 
 **File**: `config_synonyms_size.txt`
@@ -783,78 +815,104 @@ DRY	WET
 
 **Rationale**: Verbs like "walk/stroll/march" or "say/state/declare" share syntactic contexts. Mapping to the most frequent variant reduces vocabulary significantly in narrative text.
 
+**Note**: Uses multi-config format. Words mapping to different targets (said, went, saw) are combined in each config. Words mapping to the same target are split across configs.
+
 ```
 [^a-zA-Z]
 [^a-zA-Z]
 stated	said
 Stated	Said
 STATED	SAID
-declared	said
-Declared	Said
-DECLARED	SAID
-exclaimed	said
-Exclaimed	Said
-EXCLAIMED	SAID
-replied	said
-Replied	Said
-REPLIED	SAID
-answered	said
-Answered	Said
-ANSWERED	SAID
-remarked	said
-Remarked	Said
-REMARKED	SAID
-whispered	said
-Whispered	Said
-WHISPERED	SAID
-shouted	said
-Shouted	Said
-SHOUTED	SAID
-muttered	said
-Muttered	Said
-MUTTERED	SAID
 walked	went
 Walked	Went
 WALKED	WENT
-ran	went
-Ran	Went
-RAN	WENT
-rushed	went
-Rushed	Went
-RUSHED	WENT
-hurried	went
-Hurried	Went
-HURRIED	WENT
-strolled	went
-Strolled	Went
-STROLLED	WENT
-marched	went
-Marched	Went
-MARCHED	WENT
-dashed	went
-Dashed	Went
-DASHED	WENT
-sprinted	went
-Sprinted	Went
-SPRINTED	WENT
 looked	saw
 Looked	Saw
 LOOKED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+declared	said
+Declared	Said
+DECLARED	SAID
+ran	went
+Ran	Went
+RAN	WENT
 gazed	saw
 Gazed	Saw
 GAZED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+exclaimed	said
+Exclaimed	Said
+EXCLAIMED	SAID
+rushed	went
+Rushed	Went
+RUSHED	WENT
 stared	saw
 Stared	Saw
 STARED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+replied	said
+Replied	Said
+REPLIED	SAID
+hurried	went
+Hurried	Went
+HURRIED	WENT
 glanced	saw
 Glanced	Saw
 GLANCED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+answered	said
+Answered	Said
+ANSWERED	SAID
+strolled	went
+Strolled	Went
+STROLLED	WENT
 watched	saw
 Watched	Saw
 WATCHED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+remarked	said
+Remarked	Said
+REMARKED	SAID
+marched	went
+Marched	Went
+MARCHED	WENT
 observed	saw
 Observed	Saw
 OBSERVED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
+whispered	said
+Whispered	Said
+WHISPERED	SAID
+dashed	went
+Dashed	Went
+DASHED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
+shouted	said
+Shouted	Said
+SHOUTED	SAID
+sprinted	went
+Sprinted	Went
+SPRINTED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
+muttered	said
+Muttered	Said
+MUTTERED	SAID
 ```
 
 **File**: `config_verb_synonyms.txt`
@@ -931,72 +989,89 @@ ALWAYS	EVER
 
 **Rationale**: Adjectives like "beautiful/pretty/lovely" or "important/significant/crucial" share contexts. Normalizing reduces vocabulary in descriptive text.
 
+**Note**: Uses multi-config format. Each config combines one word from each target group (nice, great, bad, key, hard, easy) to minimize passes while avoiding target collisions.
+
 ```
 [^a-zA-Z]
 [^a-zA-Z]
 beautiful	nice
 Beautiful	Nice
 BEAUTIFUL	NICE
-pretty	nice
-Pretty	Nice
-PRETTY	NICE
-lovely	nice
-Lovely	Nice
-LOVELY	NICE
 wonderful	great
 Wonderful	Great
 WONDERFUL	GREAT
-excellent	great
-Excellent	Great
-EXCELLENT	GREAT
-fantastic	great
-Fantastic	Great
-FANTASTIC	GREAT
-amazing	great
-Amazing	Great
-AMAZING	GREAT
 terrible	bad
 Terrible	Bad
 TERRIBLE	BAD
-awful	bad
-Awful	Bad
-AWFUL	BAD
-horrible	bad
-Horrible	Bad
-HORRIBLE	BAD
-dreadful	bad
-Dreadful	Bad
-DREADFUL	BAD
 important	key
 Important	Key
 IMPORTANT	KEY
-significant	key
-Significant	Key
-SIGNIFICANT	KEY
-crucial	key
-Crucial	Key
-CRUCIAL	KEY
-essential	key
-Essential	Key
-ESSENTIAL	KEY
-vital	key
-Vital	Key
-VITAL	KEY
-major	key
-Major	Key
-MAJOR	KEY
 difficult	hard
 Difficult	Hard
 DIFFICULT	HARD
-challenging	hard
-Challenging	Hard
-CHALLENGING	HARD
 simple	easy
 Simple	Easy
 SIMPLE	EASY
+
+[^a-zA-Z]
+[^a-zA-Z]
+pretty	nice
+Pretty	Nice
+PRETTY	NICE
+excellent	great
+Excellent	Great
+EXCELLENT	GREAT
+awful	bad
+Awful	Bad
+AWFUL	BAD
+significant	key
+Significant	Key
+SIGNIFICANT	KEY
+challenging	hard
+Challenging	Hard
+CHALLENGING	HARD
 straightforward	easy
 Straightforward	Easy
 STRAIGHTFORWARD	EASY
+
+[^a-zA-Z]
+[^a-zA-Z]
+lovely	nice
+Lovely	Nice
+LOVELY	NICE
+fantastic	great
+Fantastic	Great
+FANTASTIC	GREAT
+horrible	bad
+Horrible	Bad
+HORRIBLE	BAD
+crucial	key
+Crucial	Key
+CRUCIAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+amazing	great
+Amazing	Great
+AMAZING	GREAT
+dreadful	bad
+Dreadful	Bad
+DREADFUL	BAD
+essential	key
+Essential	Key
+ESSENTIAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+vital	key
+Vital	Key
+VITAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+major	key
+Major	Key
+MAJOR	KEY
 ```
 
 **File**: `config_adjective_synonyms.txt`
