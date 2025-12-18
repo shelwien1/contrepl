@@ -3,69 +3,135 @@
 stated	said
 Stated	Said
 STATED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 declared	said
 Declared	Said
 DECLARED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 exclaimed	said
 Exclaimed	Said
 EXCLAIMED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 replied	said
 Replied	Said
 REPLIED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 answered	said
 Answered	Said
 ANSWERED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 remarked	said
 Remarked	Said
 REMARKED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 whispered	said
 Whispered	Said
 WHISPERED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 shouted	said
 Shouted	Said
 SHOUTED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 muttered	said
 Muttered	Said
 MUTTERED	SAID
+
+[^a-zA-Z]
+[^a-zA-Z]
 walked	went
 Walked	Went
 WALKED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 ran	went
 Ran	Went
 RAN	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 rushed	went
 Rushed	Went
 RUSHED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 hurried	went
 Hurried	Went
 HURRIED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 strolled	went
 Strolled	Went
 STROLLED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 marched	went
 Marched	Went
 MARCHED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 dashed	went
 Dashed	Went
 DASHED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 sprinted	went
 Sprinted	Went
 SPRINTED	WENT
+
+[^a-zA-Z]
+[^a-zA-Z]
 looked	saw
 Looked	Saw
 LOOKED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
 gazed	saw
 Gazed	Saw
 GAZED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
 stared	saw
 Stared	Saw
 STARED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
 glanced	saw
 Glanced	Saw
 GLANCED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
 watched	saw
 Watched	Saw
 WATCHED	SAW
+
+[^a-zA-Z]
+[^a-zA-Z]
 observed	saw
 Observed	Saw
 OBSERVED	SAW

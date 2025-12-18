@@ -129,6 +129,44 @@ The tool supports:
 
 Configs are applied in sequence during compression and reversed during decompression.
 
+### Critical: Many-to-One Mappings Require Multi-Config
+
+**Important constraint**: Within a single config, each replacement target (`to` value) can only map back to ONE source (`from` value). If multiple words map to the same target in one config, only the first can be restored - **this would be lossy**.
+
+**Example of LOSSY config** (DO NOT USE):
+```
+[^a-zA-Z]
+[^a-zA-Z]
+stated	said
+declared	said    # PROBLEM: "said" already maps back to "stated"
+exclaimed	said   # PROBLEM: cannot restore to "exclaimed"
+```
+
+**Solution**: Use multi-config format - separate configs for each unique from→to mapping:
+```
+[^a-zA-Z]
+[^a-zA-Z]
+stated	said
+Stated	Said
+
+[^a-zA-Z]
+[^a-zA-Z]
+declared	said
+Declared	Said
+
+[^a-zA-Z]
+[^a-zA-Z]
+exclaimed	said
+Exclaimed	Said
+```
+
+Each config tracks its own flags, so:
+1. Forward pass: All three words become "said"
+2. Backward pass (reverse order): Each config's flags restore its specific word
+   - Config 3 flags: restore "said" → "exclaimed" where needed
+   - Config 2 flags: restore "said" → "declared" where needed
+   - Config 1 flags: restore "said" → "stated" where needed
+
 ### Pattern Matching
 
 - Uses PCRE2 library with JIT compilation for performance
