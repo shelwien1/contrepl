@@ -1,0 +1,5 @@
+[^a-zA-Z]
+[^a-zA-Z]
+an	a
+An	A
+AN	A
