@@ -635,7 +635,14 @@ int main(int argc, char **argv) {
   vector<ParsedConfig> lossy_configs;
   vector<ParsedConfig> lossless_configs;
 
+  // Count total pairs first for progress reporting
   qword total_pairs = 0;
+  for (const ParsedConfig& cfg : configs) {
+    total_pairs += cfg.pairs.size();
+  }
+  fprintf(stderr, "Total pairs to check: %llu\n", total_pairs);
+
+  qword tested_pairs = 0;
   qword lossy_count = 0;
   qword lossless_count = 0;
 
@@ -653,7 +660,12 @@ int main(int argc, char **argv) {
             cfg.name.c_str(), (qword)cfg.pairs.size());
 
     for (const ReplacementPair& pair : cfg.pairs) {
-      total_pairs++;
+      // Progress reporting
+      tested_pairs++;
+      double progress = (total_pairs > 0) ? (100.0 * tested_pairs / total_pairs) : 100.0;
+      fprintf(stderr, "\rTesting %llu/%llu (%.1f%%) - lossless: %llu, lossy: %llu",
+              tested_pairs, total_pairs, progress, lossless_count, lossy_count);
+      fflush(stderr);
 
       if (pair.from == pair.to) {
         // Trivially lossless (no change)
@@ -683,6 +695,9 @@ int main(int argc, char **argv) {
       lossless_configs.push_back(std::move(lossless_cfg));
     }
   }
+
+  // End progress line
+  fprintf(stderr, "\n");
 
   fprintf(stderr, "Total pairs: %llu, Lossless: %llu, Lossy: %llu\n",
           total_pairs, lossless_count, lossy_count);
