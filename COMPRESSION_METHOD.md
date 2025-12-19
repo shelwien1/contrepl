@@ -1165,15 +1165,27 @@ All semantic replacement configs showed **negative results**:
 
 ### Key Insights
 
-1. **Flag overhead is critical**: The flag file must compress well enough to offset the vocabulary reduction benefit. For semantic replacements, the flags are too unpredictable.
+1. **Flag overhead is critical**: The compressed flag file must be smaller than the vocabulary reduction benefit. For semantic replacements, the flags are too unpredictable.
 
 2. **Document-level consistency wins**: British/American spelling works because the "choice" is made once per document, not per word. The flag encoder can learn this quickly.
 
 3. **Syntactic context ≠ semantic predictability**: While antonyms like "good/bad" share syntactic contexts ("a ___ idea"), the semantic choice cannot be predicted from syntax alone.
 
-4. **High transformation count hurts**: Plurals had the largest compressed flag file (110KB) and the worst hpc result (-44KB). More flags = more unpredictable bits to encode.
+4. **fp8/hpc gap reveals what strong LM already models**: Comparing vocabulary reduction benefit (before adding flag cost) between compressors shows what hpc's language model already handles.
 
-5. **Compressor matters**: hpc (paq8hp, Hutter Prize winner) consistently shows larger losses than fp8, suggesting the vocabulary reduction benefit is already captured by hpc's stronger language modeling.
+### fp8 vs hpc: Vocabulary Reduction Benefit Analysis
+
+| Config | fp8 Vocab Reduction | hpc Vocab Reduction | Difference | hpc/fp8 Loss Ratio |
+|--------|---------------------|---------------------|------------|-------------------|
+| htmlc | 58,679 | 56,529 | 2,150 | 0.94 |
+| british_american | 25,989 | 23,892 | 2,097 | 0.77 |
+| plurals | 92,745 | 66,233 | **26,512** | **2.52** |
+| past_tense | 20,326 | 14,908 | 5,418 | 1.20 |
+| frequency_normalize | 52,389 | 45,031 | 7,358 | 1.42 |
+
+**Plurals case is striking**: hpc only gains 66KB from plural normalization while fp8 gains 93KB - a 27KB gap. This means hpc's language model already captures plural/singular patterns effectively. The 2.52x loss ratio (hpc loses 2.5x more than fp8) confirms that explicit plural normalization is redundant for strong compressors.
+
+**Implication**: Preprocessing that helps weak compressors may hurt with strong ones. The stronger the language model, the less benefit from explicit vocabulary normalization - and the same flag overhead becomes proportionally worse.
 
 ### Recommendations
 
