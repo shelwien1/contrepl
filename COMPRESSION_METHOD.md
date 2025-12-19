@@ -1173,19 +1173,33 @@ All semantic replacement configs showed **negative results**:
 
 4. **fp8/hpc gap reveals what strong LM already models**: Comparing vocabulary reduction benefit (before adding flag cost) between compressors shows what hpc's language model already handles.
 
-### fp8 vs hpc: Vocabulary Reduction Benefit Analysis
+### fp8 vs hpc: Compression Ratio Correlation
 
-| Config | fp8 Vocab Reduction | hpc Vocab Reduction | Difference | hpc/fp8 Loss Ratio |
-|--------|---------------------|---------------------|------------|-------------------|
-| htmlc | 58,679 | 56,529 | 2,150 | 0.94 |
-| british_american | 25,989 | 23,892 | 2,097 | 0.77 |
-| plurals | 92,745 | 66,233 | **26,512** | **2.52** |
-| past_tense | 20,326 | 14,908 | 5,418 | 1.20 |
-| frequency_normalize | 52,389 | 45,031 | 7,358 | 1.42 |
+**Baseline compression ratio**: fp8/hpc = 140,389,379 / 125,355,714 = **1.120**
 
-**Plurals case is striking**: hpc only gains 66KB from plural normalization while fp8 gains 93KB - a 27KB gap. This means hpc's language model already captures plural/singular patterns effectively. The 2.52x loss ratio (hpc loses 2.5x more than fp8) confirms that explicit plural normalization is redundant for strong compressors.
+If preprocessing were "compressor-neutral" (equally helpful to both), we'd expect the gain ratio fp8_gain/hpc_gain ≈ 1.12 as well. Deviations reveal what hpc already models:
 
-**Implication**: Preprocessing that helps weak compressors may hurt with strong ones. The stronger the language model, the less benefit from explicit vocabulary normalization - and the same flag overhead becomes proportionally worse.
+| Config | fp8 Gain | hpc Gain | fp8/hpc Gain Ratio | Expected | Deviation |
+|--------|----------|----------|-------------------|----------|-----------|
+| british_american | +9,027 | +6,930 | 1.30 | 1.12 | +0.18 |
+| htmlc | +38,275 | +36,125 | 1.06 | 1.12 | -0.06 |
+| past_tense | -27,601 | -33,019 | 0.84 | 1.12 | -0.28 |
+| adj_synonyms | -9,935 | -12,715 | 0.78 | 1.12 | -0.34 |
+| freq_normalize | -17,366 | -24,724 | 0.70 | 1.12 | -0.42 |
+| verb_synonyms | -4,211 | -6,943 | 0.61 | 1.12 | -0.51 |
+| synonyms_size | -4,721 | -8,316 | 0.57 | 1.12 | -0.55 |
+| antonyms | -3,594 | -6,394 | 0.56 | 1.12 | -0.56 |
+| **plurals** | -17,395 | -43,907 | **0.40** | 1.12 | **-0.72** |
+
+**Interpretation**:
+- **Ratio > 1.12** (british_american): fp8 benefits more than expected - neither compressor fully models this
+- **Ratio ≈ 1.12** (htmlc): Compressor-neutral - simple deterministic transform helps both equally
+- **Ratio < 1.12**: hpc loses proportionally more - hpc's LM already partially models this pattern
+- **Ratio << 1.12** (plurals at 0.40): hpc strongly models this - explicit normalization is redundant
+
+**Plurals case**: The 0.40 ratio means hpc is hurt 2.5x more than fp8. This confirms hpc's language model already captures plural/singular agreement effectively, making explicit plural normalization counterproductive.
+
+**Implication**: The gain ratio deviation from baseline compression ratio indicates how well the stronger compressor already handles each pattern. Preprocessing only helps when the ratio stays near or above 1.12.
 
 ### Recommendations
 
