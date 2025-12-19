@@ -1116,7 +1116,7 @@ When testing these configs:
 - **Preprocessed**: `enwik_text2_drt` (560,405,219 bytes) - after DRT preprocessing
 - **Compressors tested**:
   - **fp8**: Fast PAQ variant (baseline: 140,389,379 bytes)
-  - **hpc**: High-performance compressor (baseline: 125,355,714 bytes)
+  - **hpc**: paq8hp variant, previous Hutter Prize winner (baseline: 125,355,714 bytes)
 
 ## Results Table
 
@@ -1170,7 +1170,7 @@ All semantic replacement configs showed **negative results**:
 
 4. **High transformation count hurts**: Plurals had the most transformations (110K flags) but also the worst hpc result (-44KB). More flags = more unpredictable bits to encode.
 
-5. **Compressor matters**: hpc consistently shows larger losses than fp8, suggesting the vocabulary reduction benefit is already captured by hpc's stronger modeling.
+5. **Compressor matters**: hpc (paq8hp, Hutter Prize winner) consistently shows larger losses than fp8, suggesting the vocabulary reduction benefit is already captured by hpc's stronger language modeling.
 
 ### Recommendations
 
