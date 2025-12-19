@@ -1120,7 +1120,7 @@ When testing these configs:
 
 ## Results Table
 
-| Config | Config File | Transformed Size | Flag Size | fp8 Compressed | fp8 Gain | hpc Compressed | hpc Gain |
+| Config | Config File | Transformed Size | Compressed Flags | fp8 Compressed | fp8 Gain | hpc Compressed | hpc Gain |
 |--------|-------------|------------------|-----------|----------------|----------|----------------|----------|
 | Baseline | - | 560,405,219 | - | 140,389,379 | - | 125,355,714 | - |
 | 0 | htmlc.txt | 560,115,260 | 20,404 | 140,330,700 | **+38,275** | 125,299,185 | **+36,125** |
@@ -1147,15 +1147,15 @@ When testing these configs:
 **Config 1 (British/American spelling)**: Modest but consistent gains (+9KB fp8, +7KB hpc). This works because:
 - Spelling variants are **document-level consistent** (a document uses either British OR American spelling throughout)
 - Flag prediction is nearly perfect once the document's spelling style is detected
-- Low flag count (16,962) indicates few actual transformations needed
+- Note: 17KB of compressed flags is still significant overhead, but the vocabulary reduction benefit outweighs it
 
 ### Unsuccessful Configs
 
 All semantic replacement configs showed **negative results**:
 
-| Config | Flag Overhead | Main Issue |
-|--------|---------------|------------|
-| Plurals | 110,140 | Highest flag count - too many transformations |
+| Config | Compressed Flags (bytes) | Main Issue |
+|--------|--------------------------|------------|
+| Plurals | 110,140 | Highest flag overhead - too many transformations |
 | Frequency Normalize | 69,755 | Words like "upon"→"on" don't share enough context |
 | Past Tense | 47,927 | Tense prediction harder than expected |
 | Adjective Synonyms | 33,360 | Style/register not predictable enough |
@@ -1171,7 +1171,7 @@ All semantic replacement configs showed **negative results**:
 
 3. **Syntactic context ≠ semantic predictability**: While antonyms like "good/bad" share syntactic contexts ("a ___ idea"), the semantic choice cannot be predicted from syntax alone.
 
-4. **High transformation count hurts**: Plurals had the most transformations (110K flags) but also the worst hpc result (-44KB). More flags = more unpredictable bits to encode.
+4. **High transformation count hurts**: Plurals had the largest compressed flag file (110KB) and the worst hpc result (-44KB). More flags = more unpredictable bits to encode.
 
 5. **Compressor matters**: hpc (paq8hp, Hutter Prize winner) consistently shows larger losses than fp8, suggesting the vocabulary reduction benefit is already captured by hpc's stronger language modeling.
 
