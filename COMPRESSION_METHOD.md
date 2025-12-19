@@ -1105,3 +1105,84 @@ When testing these configs:
 4. **Watch for false positives**: Words that match patterns but shouldn't transform (e.g., "used" as adjective vs. past tense)
 5. **Semantic configs require good flag compression**: Antonym/synonym replacements only help if the bidirectional CM can predict flags well
 6. **Order matters**: Apply grammatical configs before semantic configs; the transformed text provides better context for semantic flag prediction
+
+---
+
+# Experimental Results
+
+## Test Setup
+
+- **Input**: `enwik_text2` (881,305,418 bytes) - cleaned Wikipedia text
+- **Preprocessed**: `enwik_text2_drt` (560,405,219 bytes) - after DRT preprocessing
+- **Compressors tested**:
+  - **fp8**: Fast PAQ variant (baseline: 140,389,379 bytes)
+  - **hpc**: High-performance compressor (baseline: 125,355,714 bytes)
+
+## Results Table
+
+| Config | Config File | Transformed Size | Flag Size | fp8 Compressed | fp8 Gain | hpc Compressed | hpc Gain |
+|--------|-------------|------------------|-----------|----------------|----------|----------------|----------|
+| Baseline | - | 560,405,219 | - | 140,389,379 | - | 125,355,714 | - |
+| 0 | htmlc.txt | 560,115,260 | 20,404 | 140,330,700 | **+38,275** | 125,299,185 | **+36,125** |
+| 1 | config_british_american.txt | 560,390,130 | 16,962 | 140,363,390 | **+9,027** | 125,331,822 | **+6,930** |
+| 2 | config_adjective_synonyms.txt | 560,398,902 | 33,360 | 140,365,954 | -9,935 | 125,335,069 | -12,715 |
+| 3 | config_antonyms.txt | 560,422,927 | 31,281 | 140,361,692 | -3,594 | 125,330,831 | -6,394 |
+| 4 | config_frequency_normalize.txt | 560,590,302 | 69,755 | 140,336,990 | -17,366 | 125,310,683 | -24,724 |
+| 5 | config_past_tense.txt | 560,421,707 | 47,927 | 140,369,053 | -27,601 | 125,340,806 | -33,019 |
+| 6 | config_plurals.txt | 560,405,219 | 110,140 | 140,296,634 | -17,395 | 125,289,481 | -43,907 |
+| 7 | config_synonyms_size.txt | 560,397,805 | 27,021 | 140,367,079 | -4,721 | 125,337,009 | -8,316 |
+| 8 | config_verb_synonyms.txt | 560,394,948 | 17,042 | 140,376,548 | -4,211 | 125,345,615 | -6,943 |
+
+**Note**: Positive gain = compression improvement (bytes saved). Negative = overhead exceeds benefit.
+
+## Analysis
+
+### Successful Configs
+
+**Config 0 (htmlc.txt)**: Best performer with +38KB gain on fp8. This config targets HTML/markup-specific patterns where replacements are highly predictable from context.
+
+**Config 1 (British/American spelling)**: Modest but consistent gains (+9KB fp8, +7KB hpc). This works because:
+- Spelling variants are **document-level consistent** (a document uses either British OR American spelling throughout)
+- Flag prediction is nearly perfect once the document's spelling style is detected
+- Low flag count (16,962) indicates few actual transformations needed
+
+### Unsuccessful Configs
+
+All semantic replacement configs showed **negative results**:
+
+| Config | Flag Overhead | Main Issue |
+|--------|---------------|------------|
+| Plurals | 110,140 | Highest flag count - too many transformations |
+| Frequency Normalize | 69,755 | Words like "upon"→"on" don't share enough context |
+| Past Tense | 47,927 | Tense prediction harder than expected |
+| Adjective Synonyms | 33,360 | Style/register not predictable enough |
+| Antonyms | 31,281 | Semantic polarity unpredictable from syntax |
+| Synonyms Size | 27,021 | Formal/informal distinction too subtle |
+| Verb Synonyms | 17,042 | Speech verbs vary by author style, not context |
+
+### Key Insights
+
+1. **Flag overhead is critical**: The flag file must compress well enough to offset the vocabulary reduction benefit. For semantic replacements, the flags are too unpredictable.
+
+2. **Document-level consistency wins**: British/American spelling works because the "choice" is made once per document, not per word. The flag encoder can learn this quickly.
+
+3. **Syntactic context ≠ semantic predictability**: While antonyms like "good/bad" share syntactic contexts ("a ___ idea"), the semantic choice cannot be predicted from syntax alone.
+
+4. **High transformation count hurts**: Plurals had the most transformations (110K flags) but also the worst hpc result (-44KB). More flags = more unpredictable bits to encode.
+
+5. **Compressor matters**: hpc consistently shows larger losses than fp8, suggesting the vocabulary reduction benefit is already captured by hpc's stronger modeling.
+
+### Recommendations
+
+For practical use:
+
+1. **Use sparingly**: Only apply configs with proven positive results (spelling normalization, HTML/markup patterns)
+
+2. **Profile first**: Test each config individually on your target corpus before combining
+
+3. **Avoid semantic replacements**: Synonym/antonym/tense configs don't work well on Wikipedia-style text
+
+4. **Consider corpus characteristics**: Fiction with consistent narrator style might benefit more from verb synonym configs than encyclopedic text
+
+5. **Stack successful configs**: Combine only configs that individually show gains; losses tend to compound
+
