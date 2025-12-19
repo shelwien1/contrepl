@@ -1,0 +1,53 @@
+[^a-zA-Z]
+[^a-zA-Z]
+large	big
+Large	Big
+LARGE	BIG
+small	little
+Small	Little
+SMALL	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
+huge	big
+Huge	Big
+HUGE	BIG
+tiny	little
+Tiny	Little
+TINY	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
+enormous	big
+Enormous	Big
+ENORMOUS	BIG
+miniature	little
+Miniature	Little
+MINIATURE	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
+vast	big
+Vast	Big
+VAST	BIG
+minute	little
+Minute	Little
+MINUTE	LITTLE
+
+[^a-zA-Z]
+[^a-zA-Z]
+immense	big
+Immense	Big
+IMMENSE	BIG
+
+[^a-zA-Z]
+[^a-zA-Z]
+gigantic	big
+Gigantic	Big
+GIGANTIC	BIG
+
+[^a-zA-Z]
+[^a-zA-Z]
+massive	big
+Massive	Big
+MASSIVE	BIG

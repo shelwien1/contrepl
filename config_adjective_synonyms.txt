@@ -1,0 +1,80 @@
+[^a-zA-Z]
+[^a-zA-Z]
+beautiful	nice
+Beautiful	Nice
+BEAUTIFUL	NICE
+wonderful	great
+Wonderful	Great
+WONDERFUL	GREAT
+terrible	bad
+Terrible	Bad
+TERRIBLE	BAD
+important	key
+Important	Key
+IMPORTANT	KEY
+difficult	hard
+Difficult	Hard
+DIFFICULT	HARD
+simple	easy
+Simple	Easy
+SIMPLE	EASY
+
+[^a-zA-Z]
+[^a-zA-Z]
+pretty	nice
+Pretty	Nice
+PRETTY	NICE
+excellent	great
+Excellent	Great
+EXCELLENT	GREAT
+awful	bad
+Awful	Bad
+AWFUL	BAD
+significant	key
+Significant	Key
+SIGNIFICANT	KEY
+challenging	hard
+Challenging	Hard
+CHALLENGING	HARD
+straightforward	easy
+Straightforward	Easy
+STRAIGHTFORWARD	EASY
+
+[^a-zA-Z]
+[^a-zA-Z]
+lovely	nice
+Lovely	Nice
+LOVELY	NICE
+fantastic	great
+Fantastic	Great
+FANTASTIC	GREAT
+horrible	bad
+Horrible	Bad
+HORRIBLE	BAD
+crucial	key
+Crucial	Key
+CRUCIAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+amazing	great
+Amazing	Great
+AMAZING	GREAT
+dreadful	bad
+Dreadful	Bad
+DREADFUL	BAD
+essential	key
+Essential	Key
+ESSENTIAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+vital	key
+Vital	Key
+VITAL	KEY
+
+[^a-zA-Z]
+[^a-zA-Z]
+major	key
+Major	Key
+MAJOR	KEY
