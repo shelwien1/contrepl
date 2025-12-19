@@ -1139,7 +1139,10 @@ When testing these configs:
 
 ### Successful Configs
 
-**Config 0 (htmlc.txt)**: Best performer with +38KB gain on fp8. This config targets HTML/markup-specific patterns where replacements are highly predictable from context.
+**Config 0 (htmlc.txt)**: Best performer with +38KB gain on fp8. This config converts HTML numeric character entities (like `&#65;` → `A`, `&#8212;` → `—`) to their actual Unicode characters. It works well because:
+- Entity encoding is **deterministic** - each entity maps to exactly one character
+- Documents using entities tend to use them **consistently throughout**
+- Reduces entity sequences (e.g., `&#8212;` is 8 bytes) to shorter UTF-8 encodings (e.g., `—` is 3 bytes)
 
 **Config 1 (British/American spelling)**: Modest but consistent gains (+9KB fp8, +7KB hpc). This works because:
 - Spelling variants are **document-level consistent** (a document uses either British OR American spelling throughout)
