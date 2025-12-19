@@ -1105,3 +1105,113 @@ When testing these configs:
 4. **Watch for false positives**: Words that match patterns but shouldn't transform (e.g., "used" as adjective vs. past tense)
 5. **Semantic configs require good flag compression**: Antonym/synonym replacements only help if the bidirectional CM can predict flags well
 6. **Order matters**: Apply grammatical configs before semantic configs; the transformed text provides better context for semantic flag prediction
+
+---
+
+# Experimental Results
+
+## Test Setup
+
+- **Input**: `enwik_text2` (881,305,418 bytes) - cleaned Wikipedia text
+- **Preprocessed**: `enwik_text2_drt` (560,405,219 bytes) - after DRT preprocessing
+- **Compressors tested**:
+  - **fp8**: Fast PAQ variant (baseline: 140,389,379 bytes)
+  - **hpc**: paq8hp variant, previous Hutter Prize winner (baseline: 125,355,714 bytes)
+
+## Results Table
+
+| Config | Config File | Transformed Size | Compressed Flags | fp8 Compressed | fp8 Gain | hpc Compressed | hpc Gain |
+|--------|-------------|------------------|-----------|----------------|----------|----------------|----------|
+| Baseline | - | 560,405,219 | - | 140,389,379 | - | 125,355,714 | - |
+| 0 | htmlc.txt | 560,115,260 | 20,404 | 140,330,700 | **+38,275** | 125,299,185 | **+36,125** |
+| 1 | config_british_american.txt | 560,390,130 | 16,962 | 140,363,390 | **+9,027** | 125,331,822 | **+6,930** |
+| 2 | config_adjective_synonyms.txt | 560,398,902 | 33,360 | 140,365,954 | -9,935 | 125,335,069 | -12,715 |
+| 3 | config_antonyms.txt | 560,422,927 | 31,281 | 140,361,692 | -3,594 | 125,330,831 | -6,394 |
+| 4 | config_frequency_normalize.txt | 560,590,302 | 69,755 | 140,336,990 | -17,366 | 125,310,683 | -24,724 |
+| 5 | config_past_tense.txt | 560,421,707 | 47,927 | 140,369,053 | -27,601 | 125,340,806 | -33,019 |
+| 6 | config_plurals.txt | 560,405,219 | 110,140 | 140,296,634 | -17,395 | 125,289,481 | -43,907 |
+| 7 | config_synonyms_size.txt | 560,397,805 | 27,021 | 140,367,079 | -4,721 | 125,337,009 | -8,316 |
+| 8 | config_verb_synonyms.txt | 560,394,948 | 17,042 | 140,376,548 | -4,211 | 125,345,615 | -6,943 |
+
+**Note**: Positive gain = compression improvement (bytes saved). Negative = overhead exceeds benefit.
+
+## Analysis
+
+### Successful Configs
+
+**Config 0 (htmlc.txt)**: Best performer with +38KB gain on fp8. This config converts HTML numeric character entities (like `&#65;` → `A`, `&#8212;` → `—`) to their actual Unicode characters. It works well because:
+- Entity encoding is **deterministic** - each entity maps to exactly one character
+- Documents using entities tend to use them **consistently throughout**
+- Reduces entity sequences (e.g., `&#8212;` is 8 bytes) to shorter UTF-8 encodings (e.g., `—` is 3 bytes)
+
+**Config 1 (British/American spelling)**: Modest but consistent gains (+9KB fp8, +7KB hpc). This works because:
+- Spelling variants are **document-level consistent** (a document uses either British OR American spelling throughout)
+- Flag prediction is nearly perfect once the document's spelling style is detected
+- Note: 17KB of compressed flags is still significant overhead, but the vocabulary reduction benefit outweighs it
+
+### Unsuccessful Configs
+
+All semantic replacement configs showed **negative results**:
+
+| Config | Compressed Flags (bytes) | Main Issue |
+|--------|--------------------------|------------|
+| Plurals | 110,140 | Highest flag overhead - too many transformations |
+| Frequency Normalize | 69,755 | Words like "upon"→"on" don't share enough context |
+| Past Tense | 47,927 | Tense prediction harder than expected |
+| Adjective Synonyms | 33,360 | Style/register not predictable enough |
+| Antonyms | 31,281 | Semantic polarity unpredictable from syntax |
+| Synonyms Size | 27,021 | Formal/informal distinction too subtle |
+| Verb Synonyms | 17,042 | Speech verbs vary by author style, not context |
+
+### Key Insights
+
+1. **Flag overhead is critical**: The compressed flag file must be smaller than the vocabulary reduction benefit. For semantic replacements, the flags are too unpredictable.
+
+2. **Document-level consistency wins**: British/American spelling works because the "choice" is made once per document, not per word. The flag encoder can learn this quickly.
+
+3. **Syntactic context ≠ semantic predictability**: While antonyms like "good/bad" share syntactic contexts ("a ___ idea"), the semantic choice cannot be predicted from syntax alone.
+
+4. **fp8/hpc gap reveals what strong LM already models**: Comparing vocabulary reduction benefit (before adding flag cost) between compressors shows what hpc's language model already handles.
+
+### fp8 vs hpc: Compression Ratio Correlation
+
+**Baseline compression ratio**: fp8/hpc = 140,389,379 / 125,355,714 = **1.120**
+
+If preprocessing were "compressor-neutral" (equally helpful to both), we'd expect the gain ratio fp8_gain/hpc_gain ≈ 1.12 as well. Deviations reveal what hpc already models:
+
+| Config | fp8 Gain | hpc Gain | fp8/hpc Gain Ratio | Expected | Deviation |
+|--------|----------|----------|-------------------|----------|-----------|
+| british_american | +9,027 | +6,930 | 1.30 | 1.12 | +0.18 |
+| htmlc | +38,275 | +36,125 | 1.06 | 1.12 | -0.06 |
+| past_tense | -27,601 | -33,019 | 0.84 | 1.12 | -0.28 |
+| adj_synonyms | -9,935 | -12,715 | 0.78 | 1.12 | -0.34 |
+| freq_normalize | -17,366 | -24,724 | 0.70 | 1.12 | -0.42 |
+| verb_synonyms | -4,211 | -6,943 | 0.61 | 1.12 | -0.51 |
+| synonyms_size | -4,721 | -8,316 | 0.57 | 1.12 | -0.55 |
+| antonyms | -3,594 | -6,394 | 0.56 | 1.12 | -0.56 |
+| **plurals** | -17,395 | -43,907 | **0.40** | 1.12 | **-0.72** |
+
+**Interpretation**:
+- **Ratio > 1.12** (british_american): fp8 benefits more than expected - neither compressor fully models this
+- **Ratio ≈ 1.12** (htmlc): Compressor-neutral - simple deterministic transform helps both equally
+- **Ratio < 1.12**: hpc loses proportionally more - hpc's LM already partially models this pattern
+- **Ratio << 1.12** (plurals at 0.40): hpc strongly models this - explicit normalization is redundant
+
+**Plurals case**: The 0.40 ratio means hpc is hurt 2.5x more than fp8. This confirms hpc's language model already captures plural/singular agreement effectively, making explicit plural normalization counterproductive.
+
+**Implication**: The gain ratio deviation from baseline compression ratio indicates how well the stronger compressor already handles each pattern. Preprocessing only helps when the ratio stays near or above 1.12.
+
+### Recommendations
+
+For practical use:
+
+1. **Use sparingly**: Only apply configs with proven positive results (spelling normalization, HTML/markup patterns)
+
+2. **Profile first**: Test each config individually on your target corpus before combining
+
+3. **Avoid semantic replacements**: Synonym/antonym/tense configs don't work well on Wikipedia-style text
+
+4. **Consider corpus characteristics**: Fiction with consistent narrator style might benefit more from verb synonym configs than encyclopedic text
+
+5. **Stack successful configs**: Combine only configs that individually show gains; losses tend to compound
+
