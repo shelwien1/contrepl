@@ -17,15 +17,18 @@ ifdef WINDIR
   DLL_FLAGS = -shared
 endif
 
-all: repl2 default.dll
+all: repl2 repl2chk default.dll
 
 repl2: repl2.cpp
 	$(CXX) $(CXXFLAGS) -o repl2 repl2.cpp $(REPL2_LDFLAGS)
+
+repl2chk: repl2chk.cpp
+	$(CXX) $(CXXFLAGS) -o repl2chk repl2chk.cpp $(LDFLAGS)
 
 default.dll: default_dll.cpp
 	$(CXX) $(CXXFLAGS) $(DLL_FLAGS) -o default.dll default_dll.cpp
 
 clean:
-	rm -f repl2 default.dll
+	rm -f repl2 repl2chk default.dll
 
 .PHONY: all clean
