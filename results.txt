@@ -1,0 +1,85 @@
+
+881,305,418 enwik_text2
+560,405,219 enwik_text2_drt
+
+560,115,260 enwik_out_0_drt // htmlc.txt 
+140,389,379 enwik_text2_drt.fp8
+     21,571 flags // htmlc.txt 
+     20,404 optimized
+140,330,700 enwik_out_0_drt.fp8
+     38,275 = 140389379-(140330700+20404) // gain
+125,355,714 enwik_text2.hpc
+125,299,185 enwik_out_0.hpc
+     36,125 = 125355714-(125299185+20404)
+
+560,390,130 enwik_out_1_drt
+140,389,379 enwik_text2_drt.fp8
+     16,962 enwik_flg_1 // config_british_american.txt 
+140,363,390 enwik_out_1_drt.fp8
+      9,027 = 140389379-(140363390+16962)
+125,355,714 enwik_text2.hpc
+125,331,822 enwik_out_1_drt.hpc
+      6,930 = 125355714-(125331822+16962)
+
+560,398,902 enwik_out_2_drt
+140,389,379 enwik_text2_drt.fp8
+     33,360 enwik_flg_2 // config_adjective_synonyms.txt 
+140,365,954 enwik_out_2_drt.fp8
+     -9,935 = 140389379-(140365954+33360)
+125,355,714 enwik_text2.hpc
+125,335,069 enwik_out_2_drt.hpc
+    -12,715 = 125355714-(125335069+33360)
+
+560,422,927 enwik_out_3_drt
+140,389,379 enwik_text2_drt.fp8
+     31,281 enwik_flg_3 // config_antonyms.txt 
+140,361,692 enwik_out_3_drt.fp8
+     -3,594 = 140389379-(140361692+31281)
+125,355,714 enwik_text2.hpc
+125,330,831 enwik_out_3_drt.hpc
+     -6,394 = 125355714-(125330831+31281)
+
+560,590,302 enwik_out_4_drt
+140,389,379 enwik_text2_drt.fp8
+     69,755 enwik_flg_4 // config_frequency_normalize.txt 
+140,336,990 enwik_out_4_drt.fp8
+    -17,366 = 140389379-(140336990+69755)
+125,355,714 enwik_text2.hpc
+125,310,683 enwik_out_4_drt.hpc
+    -24,724 = 125355714-(125310683+69755)
+
+560,421,707 enwik_out_5_drt
+140,389,379 enwik_text2_drt.fp8
+     47,927 enwik_flg_5 // config_past_tense.txt
+140,369,053 enwik_out_5_drt.fp8
+    -27,601 = 140389379-(140369053+47927)
+125,355,714 enwik_text2.hpc
+125,340,806 enwik_out_5_drt.hpc
+    -33,019 = 125355714-(125340806+47927)
+
+560,405,219 enwik_out_6_drt
+140,389,379 enwik_text2_drt.fp8
+    110,140 enwik_flg_6 // config_plurals.txt
+140,296,634 enwik_out_6_drt.fp8
+    -17,395 = 140389379-(140296634+110140)
+125,355,714 enwik_text2.hpc
+125,289,481 enwik_out_6_drt.hpc
+    -43,907 = 125355714-(125289481+110140)
+
+560,397,805 enwik_out_7_drt
+140,389,379 enwik_text2_drt.fp8
+     27,021 enwik_flg_7 // config_synonyms_size.txt
+140,367,079 enwik_out_7_drt.fp8
+     -4,721 = 140389379-(140367079+27021)
+125,355,714 enwik_text2.hpc
+125,337,009 enwik_out_7_drt.hpc
+     -8,316 = 125355714-(125337009+27021)
+
+560,394,948 enwik_out_8_drt
+140,389,379 enwik_text2_drt.fp8
+     17,042 enwik_flg_8 // config_verb_synonyms.txt 
+140,376,548 enwik_out_8_drt.fp8
+     -4,211 = 140389379-(140376548+17042)
+125,355,714 enwik_text2.hpc
+125,345,615 enwik_out_8_drt.hpc
+     -6,943 = 125355714-(125345615+17042)
